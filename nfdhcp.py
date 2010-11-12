@@ -457,6 +457,34 @@ class VMNetProxy(object):
         logging.info("RA on %s for %s" % (iface, subnet.net))
         sendp(resp, iface=iface, verbose=False)
 
+    def ns_response(self, i, payload):
+        """ Generate a reply to an ICMPv6 neighbor solicitation
+
+        """
+        # Get the actual interface from the ifindex
+        iface = self.ifaces[payload.get_indev()]
+        ifmac = self.get_iface_hw_addr(iface)
+        subnet = self.v6nets[iface]
+        ifll = subnet.make_ll64(ifmac)
+
+        ns = IPv6(payload.get_data())
+
+        if not (subnet.net.overlaps(ns.tgt) or str(ns.tgt) == str(ifll)):
+            logging.debug("Received NS for a non-routable IP (%s)" % ns.tgt)
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return 1
+
+        payload.set_verdict(nfqueue.NF_DROP)
+
+        resp = Ether(src=ifmac, dst=ns.lladdr)/\
+               IPv6(src=str(ifll), dst=ns.src)/\
+               ICMPv6ND_NA(R=1, O=0, S=1, tgt=ns.tgt)/\
+               ICMPv6NDOptDstLLAddr(lladdr=ifmac)
+
+        logging.info("NA on %s for %s" % (iface, ns.tgt))
+        sendp(resp, iface=iface, verbose=False)
+        return 1
+
     def serve(self):
         """ Loop forever, serving DHCP requests
 
@@ -496,6 +524,11 @@ if __name__ == "__main__":
                            " solicitations from (default: %d)" %
                            DEFAULT_NFQUEUE_NUM, type="int",
                       metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
+    parser.add_option("-n", "--ns-queue", dest="ns_queue",
+                      help="The nfqueue to receive IPv6 neighbor"
+                           " solicitations from (default: %d)" %
+                           DEFAULT_NFQUEUE_NUM, type="int",
+                      metavar="NUM", default=44)
     parser.add_option("-u", "--user", dest="user",
                       help="An unprivileged user to run as",
                       metavar="UID", default=DEFAULT_USER)
@@ -531,7 +564,8 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     logging.info("Starting up")
-    proxy = VMNetProxy(opts.data_path, opts.dhcp_queue, opts.rs_queue)
+    proxy = VMNetProxy(opts.data_path, opts.dhcp_queue,
+                       opts.rs_queue, opts.ns_queue)
 
     # Drop all capabilities except CAP_NET_RAW and change uid
     try:
