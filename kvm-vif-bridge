@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# Bring the interface up (but without an IP)
+
+if [ "$MODE" == "routed" ]; then
+	ip link set $INTERFACE addr cc:47:52:4e:45:54
+	ifconfig $INTERFACE 0.0.0.0 up
+	# Add routing table entries
+	while ip rule del dev $INTERFACE; do :; done
+	ip rule add dev $INTERFACE table $LINK
+	ip route replace $IP table $LINK proto static dev $INTERFACE
+
+	# Enable proxy ARP/NDP
+	echo 1 > /proc/sys/net/ipv4/conf/$INTERFACE/proxy_arp
+	echo 0 > /proc/sys/net/ipv6/conf/$INTERFACE/proxy_ndp
+
+	# Add a routing entry for the eui-64
+	prefix=$(ip -6 route list table $LINK | grep -m 1 "/64" | awk '{ print $1 }')
+	uplink=$(ip -6 route list table $LINK | grep -m 1 default | sed 's/.* dev \([^ ]\+\).*/\1/')
+	eui64=$(/home/apollon/mac2eui64.py $MAC $prefix)
+
+	while ip -6 rule del dev $INTERFACE; do :; done
+	ip -6 rule add dev $INTERFACE table $LINK
+	ip -6 ro replace $eui64/128 dev $INTERFACE table $LINK
+	ip -6 neigh add proxy $eui64 dev $uplink
+	
+	# Drop unicast BOOTP/DHCP packets
+	iptables -D FORWARD -i $INTERFACE -p udp --dport 67 -j DROP 2>/dev/null
+	iptables -A FORWARD -i $INTERFACE -p udp --dport 67 -j DROP
+
+	# Generate the ganeti-dhcpd configuration
+	cat >/var/run/ganeti-dhcpd/$INTERFACE <<EOF
+IP=$IP
+MAC=$MAC
+LINK=$LINK
+HOSTNAME=$INSTANCE
+TAGS=$TAGS
+EOF
+else
+	ifconfig $INTERFACE 0.0.0.0 up
+	# Add the interface to the bridge
+	brctl addif $BRIDGE $INTERFACE
+	if [ -f "/var/run/ganeti-dhcpd/$INTERFACE" ]; then
+		rm /var/run/ganeti-dhcpd/$INTERFACE
+	fi
+fi
