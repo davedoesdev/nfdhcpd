@@ -32,10 +32,11 @@ import pyinotify
 
 import IPy
 from select import select
-from socket import AF_INET, AF_PACKET, AF_UNSPEC
+from socket import AF_INET, AF_INET6
 
 from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
+from scapy.layers.inet6 import *
 from scapy.layers.dhcp import BOOTP, DHCP
 from scapy.sendrecv import sendp
 
@@ -48,7 +49,7 @@ DEFAULT_RENEWAL_TIME = 600  # 10 min
 LOG_FILENAME = "/var/log/nfdhcpd/nfdhcpd.log"
 
 SYSFS_NET = "/sys/class/net"
-MY_IP = "1.2.3.4"
+DHCP_DUMMY_SERVER_IP = "1.2.3.4"
 
 LOG_FORMAT = "%(asctime)-15s %(levelname)-6s %(message)s"
 
@@ -78,25 +79,26 @@ DHCP_REQRESP = {
     DHCPINFORM: DHCPACK,
     }
 
-class DhcpBindingHandler(pyinotify.ProcessEvent):
-    def __init__(self, dhcp):
+class ClientFileHandler(pyinotify.ProcessEvent):
+    def __init__(self, server):
         pyinotify.ProcessEvent.__init__(self)
-        self.dhcp = dhcp
+        self.server = server
 
     def process_IN_DELETE(self, event):
-        self.dhcp.remove_iface(event.name)
+        self.server.remove_iface(event.name)
 
     def process_IN_CLOSE_WRITE(self, event):
-        self.dhcp.add_iface(os.path.join(event.path, event.name))
+        self.server.add_iface(os.path.join(event.path, event.name))
 
-class DhcpBinding(object):
+
+class Client(object):
     def __init__(self, mac=None, ips=None, link=None, hostname=None):
         self.mac = mac
         self.ips = ips
         self.hostname = hostname
         self.link = link
         self.iface = None
-        
+
     @property
     def ip(self):
         return self.ips[0]
@@ -124,28 +126,41 @@ class Subnet(object):
         return str(self.net.broadcast())
 
 
-class DhcpServer(object):
-    def __init__(self, data_path, queue_num):
+class VMNetProxy(object):
+    def __init__(self, data_path, dhcp_queue_num=None,
+                 rs_queue_num=None, ns_queue_num=None):
         self.data_path = data_path
         self.clients = {}
         self.subnets = {}
         self.ifaces = {}
-        
+        self.nfq = {}
+
         # Inotify setup
         self.wm = pyinotify.WatchManager()
         mask = pyinotify.EventsCodes.ALL_FLAGS["IN_DELETE"]
         mask |= pyinotify.EventsCodes.ALL_FLAGS["IN_CLOSE_WRITE"]
-        handler = DhcpBindingHandler(self)
+        handler = ClientFileHandler(self)
         self.notifier = pyinotify.Notifier(self.wm, handler)
         self.wm.add_watch(self.data_path, mask, rec=True)
 
-        # NFQueue setup
-        self.q = nfqueue.queue()
-        self.q.set_callback(self.make_reply)
-        self.q.fast_open(queue_num, AF_INET)
-        self.q.set_queue_maxlen(5000)
+        # NFQUEUE setup
+        if dhcp_queue_num is not None:
+            self._setup_nfqueue(dhcp_queue_num, AF_INET, self.dhcp_response)
+
+        if rs_queue_num is not None:
+            self._setup_nfqueue(rs_queue_num, AF_INET6, self.rs_response)
+
+        if ns_queue_num is not None:
+            self._setup_nfqueue(ns_queue_num, AF_INET6, self.ns_response)
+
+    def _setup_nfqueue(self, queue_num, family, callback):
+        q = nfqueue.queue()
+        q.set_callback(callback)
+        q.fast_open(queue_num, family)
+        q.set_queue_maxlen(5000)
         # This is mandatory for the queue to operate
-        self.q.set_mode(nfqueue.NFQNL_COPY_PACKET)
+        q.set_mode(nfqueue.NFQNL_COPY_PACKET)
+        self.nfq[q.get_fd()] = q
 
     def build_config(self):
         self.clients.clear()
@@ -172,8 +187,8 @@ class DhcpServer(object):
             pass
 
         return ifindex
-            
-        
+
+
     def get_iface_hw_addr(self, iface):
         """ Get the interface hardware address from sysfs
 
@@ -191,15 +206,15 @@ class DhcpServer(object):
             pass
         return addr
 
-    def parse_routing_table(self, table="main"):
+    def parse_routing_table(self, table="main", family=4):
         """ Parse the given routing table to get connected route, gateway and
         default device.
 
         """
-        ipro = subprocess.Popen(["ip", "ro", "ls", "table", table],
-                                stdout=subprocess.PIPE)
+        ipro = subprocess.Popen(["ip", "-%d" % family, "ro", "ls",
+                                 "table", table], stdout=subprocess.PIPE)
         routes = ipro.stdout.readlines()
-        
+
         def_gw = None
         def_dev = None
         def_net = None
@@ -220,7 +235,7 @@ class DhcpServer(object):
                 pass
 
         return Subnet(net=def_net, gw=def_gw, dev=def_dev)
-        
+
     def parse_binding_file(self, path):
         """ Read a client configuration from a tap file
 
@@ -245,7 +260,7 @@ class DhcpServer(object):
             elif line.startswith("HOSTNAME="):
                 hostname = line.strip().split("=")[1]
 
-        return DhcpBinding(mac=mac, ips=ips, link=link, hostname=hostname)
+        return Client(mac=mac, ips=ips, link=link, hostname=hostname)
 
     def add_iface(self, path):
         """ Add an interface to monitor
@@ -283,7 +298,7 @@ class DhcpServer(object):
 
         logging.debug("Removed interface %s" % iface)
 
-    def make_reply(self, i, payload):
+    def dhcp_response(self, i, payload):
         """ Generate a reply to a BOOTP/DHCP request
 
         """
@@ -295,7 +310,7 @@ class DhcpServer(object):
 
         # Signal the kernel that it shouldn't further process the packet
         payload.set_verdict(nfqueue.NF_DROP)
-        
+
         # Get the client MAC address
         resp = pkt.getlayer(BOOTP).copy()
         hlen = resp.hlen
@@ -319,7 +334,7 @@ class DhcpServer(object):
             return
 
         resp = Ether(dst=mac, src=self.get_iface_hw_addr(iface))/\
-               IP(src=MY_IP, dst=binding.ip)/\
+               IP(src=DHCP_DUMMY_SERVER_IP, dst=binding.ip)/\
                UDP(sport=pkt.dport, dport=pkt.sport)/resp
         subnet = self.subnets[binding.link]
 
@@ -378,7 +393,7 @@ class DhcpServer(object):
         # Finally, always add the server identifier and end options
         dhcp_options += [
             ("message-type", resp_type),
-            ("server_id", MY_IP),
+            ("server_id", DHCP_DUMMY_SERVER_IP),
             "end"
         ]
         resp /= DHCP(options=dhcp_options)
@@ -395,10 +410,9 @@ class DhcpServer(object):
         self.build_config()
 
         iwfd = self.notifier._fd
-        qfd = self.q.get_fd()
 
         while True:
-            rlist, _, xlist = select([iwfd, qfd], [], [], 1.0)
+            rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], 1.0)
             # First check if there are any inotify (= configuration change)
             # events
             if iwfd in rlist:
@@ -407,7 +421,7 @@ class DhcpServer(object):
                 rlist.remove(iwfd)
 
             for fd in rlist:
-                self.q.process_pending()
+                self.nfq[fd].process_pending()
 
 
 if __name__ == "__main__":
@@ -419,8 +433,14 @@ if __name__ == "__main__":
     parser.add_option("-p", "--path", dest="data_path",
                       help="The location of the data files", metavar="DIR",
                       default=DEFAULT_PATH)
-    parser.add_option("-n", "--nfqueue-num", dest="queue_num",
-                      help="The nfqueue to receive DHCP requests from",
+    parser.add_option("-c", "--dhcp-queue", dest="dhcp_queue",
+                      help="The nfqueue to receive DHCP requests from"
+                           " (default: %d" % DEFAULT_NFQUEUE_NUM,
+                      metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
+    parser.add_option("-r", "--rs-queue", dest="rs_queue",
+                      help="The nfqueue to receive IPv6 router"
+                           " solicitations from (default: %d)" %
+                           DEFAULT_NFQUEUE_NUM,
                       metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
     parser.add_option("-u", "--user", dest="user",
                       help="An unprivileged user to run as" ,
@@ -457,7 +477,7 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     logging.info("Starting up")
-    dhcp = DhcpServer(opts.data_path, opts.queue_num)
+    proxy = VMNetProxy(opts.data_path, opts.dhcp_queue)
 
     # Drop all capabilities except CAP_NET_RAW and change uid
     try:
@@ -473,7 +493,7 @@ if __name__ == "__main__":
     capng_change_id(uid.pw_uid, uid.pw_gid,
                     CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING)
     logging.info("Ready to serve requests")
-    dhcp.serve()
+    proxy.serve()
 
 
 # vim: set ts=4 sts=4 sw=4 et :
