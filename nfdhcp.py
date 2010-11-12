@@ -125,6 +125,33 @@ class Subnet(object):
     def broadcast(self):
         return str(self.net.broadcast())
 
+    @property
+    def prefix(self):
+        return self.net.net()
+
+    @property
+    def prefixlen(self):
+        return self.net.prefixlen()
+
+    @staticmethod
+    def _make_eui64(net, mac):
+        """ Compute an EUI-64 address from an EUI-48 (MAC) address
+
+        """
+        comp = mac.split(":")
+        prefix = IPy.IP(net).net().strFullsize().split(":")[:4]
+        eui64 = comp[:3] + ["ff", "fe"] + comp[3:]
+        eui64[0] = "%02x" % (int(eui64[0], 16) ^ 0x02)
+        for l in range(0, len(eui64), 2):
+            prefix += ["".join(eui64[l:l+2])]
+        return IPy.IP(":".join(prefix))
+
+    def make_eui64(self, mac):
+        return self._make_eui64(self.net, mac)
+
+    def make_ll64(self, mac):
+        return self._make_eui64("fe80::", mac)
+
 
 class VMNetProxy(object):
     def __init__(self, data_path, dhcp_queue_num=None,
@@ -133,6 +160,7 @@ class VMNetProxy(object):
         self.clients = {}
         self.subnets = {}
         self.ifaces = {}
+        self.v6nets = {}
         self.nfq = {}
 
         # Inotify setup
@@ -154,6 +182,8 @@ class VMNetProxy(object):
             self._setup_nfqueue(ns_queue_num, AF_INET6, self.ns_response)
 
     def _setup_nfqueue(self, queue_num, family, callback):
+        logging.debug("Setting up NFQUEUE for queue %d, AF %s" %
+                      (queue_num, family))
         q = nfqueue.queue()
         q.set_callback(callback)
         q.fast_open(queue_num, family)
@@ -283,11 +313,15 @@ class VMNetProxy(object):
                 logging.debug("Added client %s on %s" %
                               (binding.hostname, iface))
                 self.ifaces[ifindex] = iface
+                self.v6nets[iface] = self.parse_routing_table(binding.link, 6)
 
     def remove_iface(self, iface):
         """ Cleanup clients on a removed interface
 
         """
+        if iface in self.v6nets:
+            del self.v6nets.iface
+
         for mac in self.clients.keys():
             if self.clients[mac].iface == iface:
                 del self.clients[mac]
@@ -402,6 +436,26 @@ class VMNetProxy(object):
                       (DHCP_TYPES[resp_type], mac, binding.ip, iface))
         sendp(resp, iface=iface, verbose=False)
 
+    def rs_response(self, i, payload):
+        """ Generate a reply to a BOOTP/DHCP request
+
+        """
+        # Get the actual interface from the ifindex
+        iface = self.ifaces[payload.get_indev()]
+        ifmac = self.get_iface_hw_addr(iface)
+        subnet = self.v6nets[iface]
+        ifll = subnet.make_ll64(ifmac)
+
+        # Signal the kernel that it shouldn't further process the packet
+        payload.set_verdict(nfqueue.NF_DROP)
+
+        resp = Ether(src=self.get_iface_hw_addr(iface))/\
+               IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
+               ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
+                                     prefixlen=subnet.prefixlen)
+
+        logging.info("RA on %s for %s" % (iface, subnet.net))
+        sendp(resp, iface=iface, verbose=False)
 
     def serve(self):
         """ Loop forever, serving DHCP requests
@@ -435,15 +489,15 @@ if __name__ == "__main__":
                       default=DEFAULT_PATH)
     parser.add_option("-c", "--dhcp-queue", dest="dhcp_queue",
                       help="The nfqueue to receive DHCP requests from"
-                           " (default: %d" % DEFAULT_NFQUEUE_NUM,
+                           " (default: %d" % DEFAULT_NFQUEUE_NUM, type="int",
                       metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
     parser.add_option("-r", "--rs-queue", dest="rs_queue",
                       help="The nfqueue to receive IPv6 router"
                            " solicitations from (default: %d)" %
-                           DEFAULT_NFQUEUE_NUM,
+                           DEFAULT_NFQUEUE_NUM, type="int",
                       metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
     parser.add_option("-u", "--user", dest="user",
-                      help="An unprivileged user to run as" ,
+                      help="An unprivileged user to run as",
                       metavar="UID", default=DEFAULT_USER)
     parser.add_option("-d", "--debug", action="store_true", dest="debug",
                       help="Turn on debugging messages")
@@ -477,7 +531,7 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     logging.info("Starting up")
-    proxy = VMNetProxy(opts.data_path, opts.dhcp_queue)
+    proxy = VMNetProxy(opts.data_path, opts.dhcp_queue, opts.rs_queue)
 
     # Drop all capabilities except CAP_NET_RAW and change uid
     try:
