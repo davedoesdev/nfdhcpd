@@ -22,6 +22,7 @@
 import os
 import re
 import glob
+import time
 import logging
 import logging.handlers
 import subprocess
@@ -52,6 +53,7 @@ SYSFS_NET = "/sys/class/net"
 DHCP_DUMMY_SERVER_IP = "1.2.3.4"
 
 LOG_FORMAT = "%(asctime)-15s %(levelname)-6s %(message)s"
+PERIODIC_RA_TIMEOUT = 30 # seconds
 
 DHCPDISCOVER = 1
 DHCPOFFER = 2
@@ -485,6 +487,22 @@ class VMNetProxy(object):
         sendp(resp, iface=iface, verbose=False)
         return 1
 
+    def send_periodic_ra(self):
+        logging.debug("Sending out periodic RAs")
+        for client in self.clients.values():
+            iface = client.iface
+            subnet = self.v6nets[iface]
+            ifmac = self.get_iface_hw_addr(iface)
+            ifll = subnet.make_ll64(ifmac)
+            resp = Ether(src=ifmac)/\
+                   IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
+                   ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
+                                         prefixlen=subnet.prefixlen)
+            try:
+                sendp(resp, iface=iface, verbose=False)
+            except:
+                logging.debug("Periodic RA on %s failed" % iface)
+
     def serve(self):
         """ Loop forever, serving DHCP requests
 
@@ -493,10 +511,20 @@ class VMNetProxy(object):
 
         iwfd = self.notifier._fd
 
+        self.send_periodic_ra()
+        timeout = PERIODIC_RA_TIMEOUT
+
         while True:
-            rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], 1.0)
+            start = time.time()
+            rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
             # First check if there are any inotify (= configuration change)
             # events
+            if not (rlist or xlist):
+                # We were woken up by a timeout
+                self.send_periodic_ra()
+                timeout = PERIODIC_RA_TIMEOUT
+                continue
+
             if iwfd in rlist:
                 self.notifier.read_events()
                 self.notifier.process_events()
@@ -504,6 +532,14 @@ class VMNetProxy(object):
 
             for fd in rlist:
                 self.nfq[fd].process_pending()
+
+            # Calculate the new timeout
+            timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
+
+            # Just to be safe we won't miss anything
+            if timeout <= 0:
+                self.send_periodic_ra()
+                timeout = PERIODIC_RA_TIMEOUT
 
 
 if __name__ == "__main__":
