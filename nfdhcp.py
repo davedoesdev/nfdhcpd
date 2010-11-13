@@ -511,35 +511,37 @@ class VMNetProxy(object):
 
         iwfd = self.notifier._fd
 
-        self.send_periodic_ra()
+        start = time.time()
         timeout = PERIODIC_RA_TIMEOUT
+        self.send_periodic_ra()
 
         while True:
-            start = time.time()
             rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
             # First check if there are any inotify (= configuration change)
             # events
             if not (rlist or xlist):
                 # We were woken up by a timeout
+                start = time.time()
                 self.send_periodic_ra()
-                timeout = PERIODIC_RA_TIMEOUT
-                continue
 
-            if iwfd in rlist:
-                self.notifier.read_events()
-                self.notifier.process_events()
-                rlist.remove(iwfd)
+            else:
+                if iwfd in rlist:
+                    self.notifier.read_events()
+                    self.notifier.process_events()
+                    rlist.remove(iwfd)
 
-            for fd in rlist:
-                self.nfq[fd].process_pending()
+                for fd in rlist:
+                    self.nfq[fd].process_pending()
 
             # Calculate the new timeout
             timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
 
             # Just to be safe we won't miss anything
             if timeout <= 0:
+                logging.debug("Send extra RAs")
                 self.send_periodic_ra()
                 timeout = PERIODIC_RA_TIMEOUT
+
 
 
 if __name__ == "__main__":
