@@ -528,6 +528,10 @@ class VMNetProxy(object):
 
         while True:
             rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
+            if xlist:
+                logging.warn("Warning: Exception on %s" %
+                             ", ".join([ str(fd) for fd in xlist]))
+
             # First check if there are any inotify (= configuration change)
             # events
             if not (rlist or xlist):
@@ -542,7 +546,10 @@ class VMNetProxy(object):
                     rlist.remove(iwfd)
 
                 for fd in rlist:
-                    self.nfq[fd].process_pending()
+                    try:
+                        self.nfq[fd].process_pending()
+                    except e, msg:
+                        logging.warn("Error processing fd %d: %s" % (fd, e))
 
             # Calculate the new timeout
             timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
