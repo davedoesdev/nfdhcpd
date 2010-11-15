@@ -215,8 +215,9 @@ class VMNetProxy(object):
             f = open(file, 'r')
             ifindex = int(f.readline().strip())
             f.close()
-        except:
-            pass
+        except IOError:
+            logging.debug("%s is down, removing" % iface)
+            self.remove_iface(iface)
 
         return ifindex
 
@@ -234,8 +235,10 @@ class VMNetProxy(object):
             f = open(file, 'r')
             addr = f.readline().strip()
             f.close()
-        except:
-            pass
+        except IOError:
+            logging.debug("%s is down, removing" % iface)
+            self.remove_iface(iface)
+
         return addr
 
     def parse_routing_table(self, table="main", family=4):
@@ -322,7 +325,7 @@ class VMNetProxy(object):
 
         """
         if iface in self.v6nets:
-            del self.v6nets.iface
+            del self.v6nets[iface]
 
         for mac in self.clients.keys():
             if self.clients[mac].iface == iface:
@@ -489,10 +492,15 @@ class VMNetProxy(object):
 
     def send_periodic_ra(self):
         logging.debug("Sending out periodic RAs")
+        start = time.time()
+        i = 0
         for client in self.clients.values():
             iface = client.iface
-            subnet = self.v6nets[iface]
             ifmac = self.get_iface_hw_addr(iface)
+            if not ifmac:
+                continue
+
+            subnet = self.v6nets[iface]
             ifll = subnet.make_ll64(ifmac)
             resp = Ether(src=ifmac)/\
                    IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
@@ -502,6 +510,8 @@ class VMNetProxy(object):
                 sendp(resp, iface=iface, verbose=False)
             except:
                 logging.debug("Periodic RA on %s failed" % iface)
+            i += 1
+        logging.debug("Sent %d RAs in %.2f seconds" % (i, time.time() - start))
 
     def serve(self):
         """ Loop forever, serving DHCP requests
