@@ -482,7 +482,12 @@ class VMNetProxy(object):
 
         payload.set_verdict(nfqueue.NF_DROP)
 
-        resp = Ether(src=ifmac, dst=ns.lladdr)/\
+        try:
+            client_lladdr = ns.lladdr
+        except AttributeError:
+            return 1
+
+        resp = Ether(src=ifmac, dst=client_lladdr)/\
                IPv6(src=str(ifll), dst=ns.src)/\
                ICMPv6ND_NA(R=1, O=0, S=1, tgt=ns.tgt)/\
                ICMPv6NDOptDstLLAddr(lladdr=ifmac)
