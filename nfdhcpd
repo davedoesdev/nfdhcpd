@@ -81,6 +81,7 @@ DHCP_REQRESP = {
     DHCPINFORM: DHCPACK,
     }
 
+
 class ClientFileHandler(pyinotify.ProcessEvent):
     def __init__(self, server):
         pyinotify.ProcessEvent.__init__(self)
