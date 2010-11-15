@@ -25,6 +25,7 @@ import glob
 import time
 import logging
 import logging.handlers
+import threading
 import subprocess
 
 import daemon
@@ -497,6 +498,11 @@ class VMNetProxy(object):
         return 1
 
     def send_periodic_ra(self):
+        # Use a separate thread as this may take a _long_ time with
+        # many interfaces and we want to be responsive in the mean time
+        threading.Thread(target=self._send_periodic_ra).start()
+
+    def _send_periodic_ra(self):
         logging.debug("Sending out periodic RAs")
         start = time.time()
         i = 0
