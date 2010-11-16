@@ -603,6 +603,7 @@ if __name__ == "__main__":
 
     if opts.daemonize:
         d = daemon.DaemonContext()
+        d.umask = 0022
         d.open()
 
     pidfile = open("/var/run/nfdhcpd.pid", "w")
@@ -615,16 +616,6 @@ if __name__ == "__main__":
     else:
         logger.setLevel(logging.INFO)
 
-    if opts.daemonize:
-        handler = logging.handlers.RotatingFileHandler(LOG_FILENAME,
-                                                       maxBytes=2097152)
-    else:
-        handler = logging.StreamHandler()
-
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logger.addHandler(handler)
-
-    logging.info("Starting up")
     proxy = VMNetProxy(opts.data_path, opts.dhcp_queue,
                        opts.rs_queue, opts.ns_queue)
 
@@ -634,13 +625,23 @@ if __name__ == "__main__":
     except ValueError:
         uid = getpwnam(opts.user)
 
-    logging.info("Setting capabilities and changing uid")
+    logging.debug("Setting capabilities and changing uid")
     logging.debug("User: %s, uid: %d, gid: %d" %
                   (opts.user, uid.pw_uid, uid.pw_gid))
     capng_clear(CAPNG_SELECT_BOTH)
     capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_NET_RAW)
     capng_change_id(uid.pw_uid, uid.pw_gid,
                     CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING)
+
+    if opts.daemonize:
+        handler = logging.handlers.RotatingFileHandler(LOG_FILENAME,
+                                                       maxBytes=2097152)
+    else:
+        handler = logging.StreamHandler()
+
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    logger.addHandler(handler)
+
     logging.info("Ready to serve requests")
     proxy.serve()
 
