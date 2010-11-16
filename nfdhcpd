@@ -54,7 +54,7 @@ SYSFS_NET = "/sys/class/net"
 DHCP_DUMMY_SERVER_IP = "1.2.3.4"
 
 LOG_FORMAT = "%(asctime)-15s %(levelname)-6s %(message)s"
-PERIODIC_RA_TIMEOUT = 30 # seconds
+PERIODIC_RA_TIMEOUT = 300 # seconds
 
 DHCPDISCOVER = 1
 DHCPOFFER = 2
@@ -543,15 +543,10 @@ class VMNetProxy(object):
                 logging.warn("Warning: Exception on %s" %
                              ", ".join([ str(fd) for fd in xlist]))
 
-            # First check if there are any inotify (= configuration change)
-            # events
-            if not (rlist or xlist):
-                # We were woken up by a timeout
-                start = time.time()
-                self.send_periodic_ra()
-
-            else:
+            if rlist:
                 if iwfd in rlist:
+                # First check if there are any inotify (= configuration change)
+                # events
                     self.notifier.read_events()
                     self.notifier.process_events()
                     rlist.remove(iwfd)
@@ -565,11 +560,10 @@ class VMNetProxy(object):
             # Calculate the new timeout
             timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
 
-            # Just to be safe we won't miss anything
             if timeout <= 0:
-                logging.debug("Send extra RAs")
+                start = time.time()
                 self.send_periodic_ra()
-                timeout = PERIODIC_RA_TIMEOUT
+                timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
 
 
 
