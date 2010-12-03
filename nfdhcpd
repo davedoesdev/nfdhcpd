@@ -42,19 +42,19 @@ from scapy.layers.inet6 import *
 from scapy.layers.dhcp import BOOTP, DHCP
 from scapy.sendrecv import sendp
 
+DEFAULT_CONFIG = "/etc/nfdhcpd/nfdhcpd.conf"
 DEFAULT_PATH = "/var/run/ganeti-dhcpd"
-DEFAULT_NFQUEUE_NUM = 42
 DEFAULT_USER = "nobody"
-DEFAULT_LEASE_TIME = 604800 # 1 week
-DEFAULT_RENEWAL_TIME = 600  # 10 min
-
-LOG_FILENAME = "/var/log/nfdhcpd/nfdhcpd.log"
-
-SYSFS_NET = "/sys/class/net"
+DEFAULT_LEASE_LIFETIME = 604800 # 1 week
+DEFAULT_LEASE_RENEWAL = 600  # 10 min
+DEFAULT_RA_PERIOD = 300 # seconds
 DHCP_DUMMY_SERVER_IP = "1.2.3.4"
 
+LOG_FILENAME = "nfdhcpd.log"
+
+SYSFS_NET = "/sys/class/net"
+
 LOG_FORMAT = "%(asctime)-15s %(levelname)-6s %(message)s"
-PERIODIC_RA_TIMEOUT = 300 # seconds
 
 DHCPDISCOVER = 1
 DHCPOFFER = 2
@@ -159,8 +159,20 @@ class Subnet(object):
 
 class VMNetProxy(object):
     def __init__(self, data_path, dhcp_queue_num=None,
-                 rs_queue_num=None, ns_queue_num=None):
+                 rs_queue_num=None, ns_queue_num=None,
+                 dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
+                 dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
+                 dhcp_server_ip=DHCP_DUMMY_SERVER_IP, dhcp_nameservers = [],
+                 ra_period=DEFAULT_RA_PERIOD, ipv6_nameservers = []):
+
         self.data_path = data_path
+        self.lease_lifetime = dhcp_lease_lifetime
+        self.lease_renewal = dhcp_lease_renewal
+        self.dhcp_server_ip = dhcp_server_ip
+        self.ra_period = ra_period
+        self.dhcp_nameservers = dhcp_nameservers
+        self.ipv6_nameservers = ipv6_nameservers
+
         self.clients = {}
         self.subnets = {}
         self.ifaces = {}
@@ -412,8 +424,8 @@ class VMNetProxy(object):
                  ("name_server", "194.177.210.211"),
                  ("broadcast_address", str(subnet.broadcast)),
                  ("subnet_mask", str(subnet.netmask)),
-                 ("renewal_time", DEFAULT_RENEWAL_TIME),
-                 ("lease_time", DEFAULT_LEASE_TIME),
+                 ("renewal_time", self.lease_renewal),
+                 ("lease_time", self.lease_lifetime),
             ]
 
         elif req_type == DHCPINFORM:
@@ -534,7 +546,7 @@ class VMNetProxy(object):
         iwfd = self.notifier._fd
 
         start = time.time()
-        timeout = PERIODIC_RA_TIMEOUT
+        timeout = self.ra_period
         self.send_periodic_ra()
 
         while True:
@@ -558,12 +570,12 @@ class VMNetProxy(object):
                         logging.warn("Error processing fd %d: %s" % (fd, e))
 
             # Calculate the new timeout
-            timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
+            timeout = self.ra_period - (time.time() - start)
 
             if timeout <= 0:
                 start = time.time()
                 self.send_periodic_ra()
-                timeout = PERIODIC_RA_TIMEOUT - (time.time() - start)
+                timeout = self.ra_period - (time.time() - start)
 
 
 
@@ -571,28 +583,12 @@ if __name__ == "__main__":
     import optparse
     from capng import *
     from pwd import getpwnam, getpwuid
+    from configobj import ConfigObj
 
     parser = optparse.OptionParser()
-    parser.add_option("-p", "--path", dest="data_path",
-                      help="The location of the data files", metavar="DIR",
-                      default=DEFAULT_PATH)
-    parser.add_option("-c", "--dhcp-queue", dest="dhcp_queue",
-                      help="The nfqueue to receive DHCP requests from"
-                           " (default: %d" % DEFAULT_NFQUEUE_NUM, type="int",
-                      metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
-    parser.add_option("-r", "--rs-queue", dest="rs_queue",
-                      help="The nfqueue to receive IPv6 router"
-                           " solicitations from (default: %d)" %
-                           DEFAULT_NFQUEUE_NUM, type="int",
-                      metavar="NUM", default=DEFAULT_NFQUEUE_NUM)
-    parser.add_option("-n", "--ns-queue", dest="ns_queue",
-                      help="The nfqueue to receive IPv6 neighbor"
-                           " solicitations from (default: %d)" %
-                           DEFAULT_NFQUEUE_NUM, type="int",
-                      metavar="NUM", default=44)
-    parser.add_option("-u", "--user", dest="user",
-                      help="An unprivileged user to run as",
-                      metavar="UID", default=DEFAULT_USER)
+    parser.add_option("-c", "--config", dest="config_file",
+                      help="The location of the data files", metavar="FILE",
+                      default=DEFAULT_CONFIG)
     parser.add_option("-d", "--debug", action="store_true", dest="debug",
                       help="Turn on debugging messages")
     parser.add_option("-f", "--foreground", action="store_false", dest="daemonize",
@@ -605,7 +601,14 @@ if __name__ == "__main__":
         d = daemon.DaemonContext()
         d.open()
 
-    pidfile = open("/var/run/nfdhcpd.pid", "w")
+    try:
+        config = ConfigObj(opts.config_file)
+    except:
+        sys.stderr.write("Failed to parse config file %s" % opts.config_file)
+        sys.exit(1)
+
+
+    pidfile = open(config["general"]["pidfile"], "w")
     pidfile.write("%s" % os.getpid())
     pidfile.close()
 
@@ -616,7 +619,8 @@ if __name__ == "__main__":
         logger.setLevel(logging.INFO)
 
     if opts.daemonize:
-        handler = logging.handlers.RotatingFileHandler(LOG_FILENAME,
+        logfile = os.path.join(config["general"]["logdir"], LOG_FILENAME)
+        handler = logging.handlers.RotatingFileHandler(logfile,
                                                        maxBytes=2097152)
     else:
         handler = logging.StreamHandler()
@@ -625,18 +629,36 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     logging.info("Starting up")
-    proxy = VMNetProxy(opts.data_path, opts.dhcp_queue,
-                       opts.rs_queue, opts.ns_queue)
+
+    proxy_opts = {}
+    if config["dhcp"].as_bool("enable_dhcp"):
+        proxy_opts.update({
+            "dhcp_queue_num": config["dhcp"].as_int("dhcp_queue"),
+            "dhcp_lease_lifetime": config["dhcp"].as_int("lease_lifetime"),
+            "dhcp_lease_renewal": config["dhcp"].as_int("lease_renewal"),
+            "dhcp_server_ip": config["dhcp"]["server_ip"],
+            "dhcp_nameservers": config["dhcp"]["nameservers"],
+        })
+
+    if config["ipv6"].as_bool("enable_ipv6"):
+        proxy_opts.update({
+            "rs_queue_num": config["ipv6"].as_int("rs_queue"),
+            "ns_queue_num": config["ipv6"].as_int("ns_queue"),
+            "ra_period": config["ipv6"].as_int("ra_period"),
+            "ipv6_nameservers": config["ipv6"]["nameservers"],
+        })
+
+    proxy = VMNetProxy(data_path=config["general"]["datapath"], **proxy_opts)
 
     # Drop all capabilities except CAP_NET_RAW and change uid
     try:
-        uid = getpwuid(int(opts.user))
+        uid = getpwuid(config["general"].as_int("user"))
     except ValueError:
-        uid = getpwnam(opts.user)
+        uid = getpwnam(config["general"]["user"])
 
     logging.info("Setting capabilities and changing uid")
     logging.debug("User: %s, uid: %d, gid: %d" %
-                  (opts.user, uid.pw_uid, uid.pw_gid))
+                  (config["general"]["user"], uid.pw_uid, uid.pw_gid))
     capng_clear(CAPNG_SELECT_BOTH)
     capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_NET_RAW)
     capng_change_id(uid.pw_uid, uid.pw_gid,
