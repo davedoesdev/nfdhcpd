@@ -197,6 +197,7 @@ class VMNetProxy(object):
         self.ra_period = ra_period
         self.dhcp_nameservers = dhcp_nameservers
         self.ipv6_nameservers = ipv6_nameservers
+        self.ipv6_enabled = False
 
         self.clients = {}
         self.subnets = {}
@@ -218,9 +219,11 @@ class VMNetProxy(object):
 
         if rs_queue_num is not None:
             self._setup_nfqueue(rs_queue_num, AF_INET6, self.rs_response)
+            self.ipv6_enabled = True
 
         if ns_queue_num is not None:
             self._setup_nfqueue(ns_queue_num, AF_INET6, self.ns_response)
+            self.ipv6_enabled = True
 
     def _setup_nfqueue(self, queue_num, family, callback):
         logging.debug("Setting up NFQUEUE for queue %d, AF %s" %
@@ -571,8 +574,11 @@ class VMNetProxy(object):
         iwfd = self.notifier._fd
 
         start = time.time()
-        timeout = self.ra_period
-        self.send_periodic_ra()
+        if self.ipv6_enabled:
+            timeout = self.ra_period
+            self.send_periodic_ra()
+        else:
+            timeout = None
 
         while True:
             rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
@@ -594,14 +600,14 @@ class VMNetProxy(object):
                     except e, msg:
                         logging.warn("Error processing fd %d: %s" % (fd, e))
 
-            # Calculate the new timeout
-            timeout = self.ra_period - (time.time() - start)
-
-            if timeout <= 0:
-                start = time.time()
-                self.send_periodic_ra()
+            if self.ipv6_enabled:
+                # Calculate the new timeout
                 timeout = self.ra_period - (time.time() - start)
 
+                if timeout <= 0:
+                    start = time.time()
+                    self.send_periodic_ra()
+                    timeout = self.ra_period - (time.time() - start)
 
 
 if __name__ == "__main__":
