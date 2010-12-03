@@ -448,22 +448,20 @@ class VMNetProxy(object):
                  ("hostname", binding.hostname),
                  ("domain", binding.hostname.split('.', 1)[-1]),
                  ("router", subnet.gw),
-                 ("name_server", "194.177.210.10"),
-                 ("name_server", "194.177.210.211"),
                  ("broadcast_address", str(subnet.broadcast)),
                  ("subnet_mask", str(subnet.netmask)),
                  ("renewal_time", self.lease_renewal),
                  ("lease_time", self.lease_lifetime),
             ]
+            dhcp_options += [("name_server", x) for x in self.dhcp_nameservers]
 
         elif req_type == DHCPINFORM:
             resp_type = DHCP_REQRESP[req_type]
             dhcp_options += [
                  ("hostname", binding.hostname),
                  ("domain", binding.hostname.split('.', 1)[-1]),
-                 ("name_server", "194.177.210.10"),
-                 ("name_server", "194.177.210.211"),
             ]
+            dhcp_options += [("name_server", x) for x in self.dhcp_nameservers]
 
         elif req_type == DHCPRELEASE:
             # Log and ignore
