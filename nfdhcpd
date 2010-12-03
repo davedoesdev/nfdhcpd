@@ -499,6 +499,10 @@ class VMNetProxy(object):
                ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
                                      prefixlen=subnet.prefixlen)
 
+        if self.ipv6_nameservers:
+            resp /= ICMPv6NDOptRDNSS(dns=self.ipv6_nameservers,
+                                     lifetime=self.ra_period * 3)
+
         logging.info("RA on %s for %s" % (iface, subnet.net))
         sendp(resp, iface=iface, verbose=False)
 
@@ -556,6 +560,9 @@ class VMNetProxy(object):
                    IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
                    ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
                                          prefixlen=subnet.prefixlen)
+            if self.ipv6_nameservers:
+                resp /= ICMPv6NDOptRDNSS(dns=self.ipv6_nameservers,
+                                         lifetime=self.ra_period * 3)
             try:
                 sendp(resp, iface=iface, verbose=False)
             except:
