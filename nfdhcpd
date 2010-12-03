@@ -56,6 +56,31 @@ SYSFS_NET = "/sys/class/net"
 
 LOG_FORMAT = "%(asctime)-15s %(levelname)-6s %(message)s"
 
+# Configuration file specification (see configobj documentation)
+CONFIG_SPEC = """
+[general]
+pidfile = string()
+datapath = string()
+logdir = string()
+user = string()
+
+[dhcp]
+enable_dhcp = boolean(default=True)
+lease_lifetime = integer(min=0, max=4294967295)
+lease_renewal = integer(min=0, max=4294967295)
+server_ip = ip_addr()
+dhcp_queue = integer(min=0, max=65535)
+nameservers = ip_addr_list(family=4)
+
+[ipv6]
+enable_ipv6 = boolean(default=True)
+ra_period = integer(min=1, max=4294967295)
+rs_queue = integer(min=0, max=65535)
+ns_queue = integer(min=0, max=65535)
+nameservers = ip_addr_list(family=6)
+"""
+
+
 DHCPDISCOVER = 1
 DHCPOFFER = 2
 DHCPREQUEST = 3
@@ -581,9 +606,38 @@ class VMNetProxy(object):
 
 if __name__ == "__main__":
     import optparse
+    from cStringIO import StringIO
     from capng import *
     from pwd import getpwnam, getpwuid
-    from configobj import ConfigObj
+    from configobj import ConfigObj, flatten_errors
+
+    import validate
+
+    validator = validate.Validator()
+
+    def is_ip_list(value, family=4):
+        try:
+            family = int(family)
+        except ValueError:
+            raise vaildate.VdtParamError(family)
+        if isinstance(value, (str, unicode)):
+            value = [value]
+        if not isinstance(value, list):
+            raise validate.VdtTypeError(value)
+
+        for entry in value:
+            try:
+                ip = IPy.IP(entry)
+            except ValueError:
+                raise validate.VdtValueError(entry)
+
+            if ip.version() != family:
+                raise validate.VdtValueError(entry)
+        return value
+
+    validator.functions["ip_addr_list"] = is_ip_list
+    config_spec = StringIO(CONFIG_SPEC)
+
 
     parser = optparse.OptionParser()
     parser.add_option("-c", "--config", dest="config_file",
@@ -602,11 +656,20 @@ if __name__ == "__main__":
         d.open()
 
     try:
-        config = ConfigObj(opts.config_file)
+        config = ConfigObj(opts.config_file, configspec=config_spec)
     except:
         sys.stderr.write("Failed to parse config file %s" % opts.config_file)
         sys.exit(1)
 
+    results = config.validate(validator)
+    if results != True:
+        logging.fatal("Configuration file validation failed! See errors below:")
+        for (section_list, key, _) in flatten_errors(config, results):
+            if key is not None:
+                logging.fatal(" '%s' in section '%s' failed validation" % (key, ", ".join(section_list)))
+            else:
+                logging.fatal(" Section '%s' is missing" % ", ".join(section_list))
+        sys.exit(1)
 
     pidfile = open(config["general"]["pidfile"], "w")
     pidfile.write("%s" % os.getpid())
