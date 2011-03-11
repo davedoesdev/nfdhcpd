@@ -137,7 +137,7 @@ def parse_routing_table(table="main", family=4):
         m = re.match("^([^\\s]+) dev %s" % def_dev, route)
         if not m:
             continue
-        def_net = m.groups(1)
+        def_net = m.group(1)
 
         try:
             def_net = IPy.IP(def_net)
