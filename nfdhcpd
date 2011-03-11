@@ -21,6 +21,7 @@
 
 import os
 import re
+import sys
 import glob
 import time
 import logging
@@ -39,7 +40,10 @@ from socket import AF_INET, AF_INET6
 
 from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
-from scapy.layers.inet6 import *
+from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
+                               ICMPv6NDOptDstLLAddr, \
+                               ICMPv6NDOptPrefixInfo, \
+                               ICMPv6NDOptRDNSS
 from scapy.layers.dhcp import BOOTP, DHCP
 from scapy.sendrecv import sendp
 
@@ -109,15 +113,89 @@ DHCP_REQRESP = {
     }
 
 
+def parse_routing_table(table="main", family=4):
+    """ Parse the given routing table to get connected route, gateway and
+    default device.
+
+    """
+    ipro = subprocess.Popen(["ip", "-%d" % family, "ro", "ls",
+                             "table", table], stdout=subprocess.PIPE)
+    routes = ipro.stdout.readlines()
+
+    def_gw = None
+    def_dev = None
+    def_net = None
+
+    for route in routes:
+        match = re.match(r'^default.*via ([^\s]+).*dev ([^\s]+)', route)
+        if match:
+            def_gw, def_dev = match.groups()
+            break
+
+    for route in routes:
+        # Find the least-specific connected route
+        m = re.match("^([^\\s]+) dev %s" % def_dev, route)
+        if not m:
+            continue
+        def_net = m.groups(1)
+
+        try:
+            def_net = IPy.IP(def_net)
+        except ValueError, e:
+            logging.warn("Unable to parse default route entry %s: %s",
+                         def_net, str(e))
+
+    return Subnet(net=def_net, gw=def_gw, dev=def_dev)
+
+
+def parse_binding_file(path):
+    """ Read a client configuration from a tap file
+
+    """
+    try:
+        iffile = open(path, 'r')
+    except EnvironmentError, e:
+        logging.warn("Unable to open binding file %s: %s", path, str(e))
+        return (None, None, None, None)
+
+    mac = None
+    ips = None
+    link = None
+    hostname = None
+
+    for line in iffile:
+        if line.startswith("IP="):
+            ip = line.strip().split("=")[1]
+            ips = ip.split()
+        elif line.startswith("MAC="):
+            mac = line.strip().split("=")[1]
+        elif line.startswith("LINK="):
+            link = line.strip().split("=")[1]
+        elif line.startswith("HOSTNAME="):
+            hostname = line.strip().split("=")[1]
+
+    return Client(mac=mac, ips=ips, link=link, hostname=hostname)
+
+
 class ClientFileHandler(pyinotify.ProcessEvent):
     def __init__(self, server):
         pyinotify.ProcessEvent.__init__(self)
         self.server = server
 
     def process_IN_DELETE(self, event):
+        """ Delete file handler
+
+        Currently this removes an interface from the watch list
+
+        """
         self.server.remove_iface(event.name)
 
     def process_IN_CLOSE_WRITE(self, event):
+        """ Add file handler
+
+        Currently this adds an interface to the watch list
+
+        """
         self.server.add_iface(os.path.join(event.path, event.name))
 
 
@@ -149,18 +227,30 @@ class Subnet(object):
 
     @property
     def netmask(self):
+        """ Return the netmask in textual representation
+
+        """
         return str(self.net.netmask())
 
     @property
     def broadcast(self):
+        """ Return the broadcast address in textual representation
+
+        """
         return str(self.net.broadcast())
 
     @property
     def prefix(self):
+        """ Return the network as an IPy.IP
+
+        """
         return self.net.net()
 
     @property
     def prefixlen(self):
+        """ Return the prefix length as an integer
+
+        """
         return self.net.prefixlen()
 
     @staticmethod
@@ -177,27 +267,42 @@ class Subnet(object):
         return IPy.IP(":".join(prefix))
 
     def make_eui64(self, mac):
+        """ Compute an EUI-64 address from an EUI-48 (MAC) address in this
+        subnet.
+
+        """
         return self._make_eui64(self.net, mac)
 
     def make_ll64(self, mac):
+        """ Compute an IPv6 Link-local address from an EUI-48 (MAC) address
+
+        """
         return self._make_eui64("fe80::", mac)
 
 
-class VMNetProxy(object):
-    def __init__(self, data_path, dhcp_queue_num=None,
+class VMNetProxy(object): # pylint: disable=R0902
+    def __init__(self, data_path, dhcp_queue_num=None, # pylint: disable=R0913
                  rs_queue_num=None, ns_queue_num=None,
                  dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
                  dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
-                 dhcp_server_ip=DHCP_DUMMY_SERVER_IP, dhcp_nameservers = [],
-                 ra_period=DEFAULT_RA_PERIOD, ipv6_nameservers = []):
+                 dhcp_server_ip=DHCP_DUMMY_SERVER_IP, dhcp_nameservers=None,
+                 ra_period=DEFAULT_RA_PERIOD, ipv6_nameservers=None):
 
         self.data_path = data_path
         self.lease_lifetime = dhcp_lease_lifetime
         self.lease_renewal = dhcp_lease_renewal
         self.dhcp_server_ip = dhcp_server_ip
         self.ra_period = ra_period
-        self.dhcp_nameservers = dhcp_nameservers
-        self.ipv6_nameservers = ipv6_nameservers
+        if dhcp_nameservers is None:
+            self.dhcp_nameserver = []
+        else:
+            self.dhcp_nameservers = dhcp_nameservers
+
+        if ipv6_nameservers is None:
+            self.ipv6_nameservers = []
+        else:
+            self.ipv6_nameservers = ipv6_nameservers
+
         self.ipv6_enabled = False
 
         self.clients = {}
@@ -210,8 +315,8 @@ class VMNetProxy(object):
         self.wm = pyinotify.WatchManager()
         mask = pyinotify.EventsCodes.ALL_FLAGS["IN_DELETE"]
         mask |= pyinotify.EventsCodes.ALL_FLAGS["IN_CLOSE_WRITE"]
-        handler = ClientFileHandler(self)
-        self.notifier = pyinotify.Notifier(self.wm, handler)
+        inotify_handler = ClientFileHandler(self)
+        self.notifier = pyinotify.Notifier(self.wm, inotify_handler)
         self.wm.add_watch(self.data_path, mask, rec=True)
 
         # NFQUEUE setup
@@ -227,8 +332,8 @@ class VMNetProxy(object):
             self.ipv6_enabled = True
 
     def _setup_nfqueue(self, queue_num, family, callback):
-        logging.debug("Setting up NFQUEUE for queue %d, AF %s" %
-                      (queue_num, family))
+        logging.debug("Setting up NFQUEUE for queue %d, AF %s",
+                      queue_num, family)
         q = nfqueue.queue()
         q.set_callback(callback)
         q.fast_open(queue_num, family)
@@ -241,23 +346,23 @@ class VMNetProxy(object):
         self.clients.clear()
         self.subnets.clear()
 
-        for file in glob.glob(os.path.join(self.data_path, "*")):
-            self.add_iface(file)
+        for path in glob.glob(os.path.join(self.data_path, "*")):
+            self.add_iface(path)
 
     def get_ifindex(self, iface):
         """ Get the interface index from sysfs
 
         """
-        file = os.path.abspath(os.path.join(SYSFS_NET, iface, "ifindex"))
-        if not file.startswith(SYSFS_NET):
+        path = os.path.abspath(os.path.join(SYSFS_NET, iface, "ifindex"))
+        if not path.startswith(SYSFS_NET):
             return None
 
         ifindex = None
 
         try:
-            f = open(file, 'r')
+            f = open(path, 'r')
         except EnvironmentError:
-            logging.debug("%s is probably down, removing" % iface)
+            logging.debug("%s is probably down, removing", iface)
             self.remove_iface(iface)
 
             return ifindex
@@ -268,10 +373,10 @@ class VMNetProxy(object):
                 ifindex = int(ifindex)
             except ValueError, e:
                 logging.warn("Failed to get ifindex for %s, cannot parse sysfs"
-                             " output '%s'" % (iface, ifindex))
+                             " output '%s'", iface, ifindex)
         except EnvironmentError, e:
-            logging.warn("Error reading %s's ifindex from sysfs: %s" %
-                         (iface, str(e)))
+            logging.warn("Error reading %s's ifindex from sysfs: %s",
+                         iface, str(e))
             self.remove_iface(iface)
         finally:
             f.close()
@@ -283,89 +388,27 @@ class VMNetProxy(object):
         """ Get the interface hardware address from sysfs
 
         """
-        file = os.path.abspath(os.path.join(SYSFS_NET, iface, "address"))
-        if not file.startswith(SYSFS_NET):
+        path = os.path.abspath(os.path.join(SYSFS_NET, iface, "address"))
+        if not path.startswith(SYSFS_NET):
             return None
 
         addr = None
         try:
-            f = open(file, 'r')
+            f = open(path, 'r')
         except EnvironmentError:
-            logging.debug("%s is probably down, removing" % iface)
+            logging.debug("%s is probably down, removing", iface)
             self.remove_iface(iface)
             return addr
 
         try:
             addr = f.readline().strip()
         except EnvironmentError, e:
-            logging.warn("Failed to read hw address for %s from sysfs: %s" %
-                         (iface, str(e)))
+            logging.warn("Failed to read hw address for %s from sysfs: %s",
+                         iface, str(e))
         finally:
             f.close()
 
         return addr
-
-    def parse_routing_table(self, table="main", family=4):
-        """ Parse the given routing table to get connected route, gateway and
-        default device.
-
-        """
-        ipro = subprocess.Popen(["ip", "-%d" % family, "ro", "ls",
-                                 "table", table], stdout=subprocess.PIPE)
-        routes = ipro.stdout.readlines()
-
-        def_gw = None
-        def_dev = None
-        def_net = None
-
-        for route in routes:
-            match = re.match(r'^default.*via ([^\s]+).*dev ([^\s]+)', route)
-            if match:
-                def_gw, def_dev = match.groups()
-                break
-
-        for route in routes:
-            # Find the least-specific connected route
-            m = re.match("^([^\\s]+) dev %s" % def_dev, route)
-            if not m:
-                continue
-            def_net = m.groups(1)
-
-            try:
-                def_net = IPy.IP(def_net)
-            except ValueError, e:
-                logging.warn("Unable to parse default route entry %s: %s" %
-                             (def_net, str(e)))
-
-        return Subnet(net=def_net, gw=def_gw, dev=def_dev)
-
-    def parse_binding_file(self, path):
-        """ Read a client configuration from a tap file
-
-        """
-        try:
-            iffile = open(path, 'r')
-        except EnvironmentError, e:
-            logging.warn("Unable to open binding file %s: %s" % (path, str(e)))
-            return (None, None, None, None)
-
-        mac = None
-        ips = None
-        link = None
-        hostname = None
-
-        for line in iffile:
-            if line.startswith("IP="):
-                ip = line.strip().split("=")[1]
-                ips = ip.split()
-            elif line.startswith("MAC="):
-                mac = line.strip().split("=")[1]
-            elif line.startswith("LINK="):
-                link = line.strip().split("=")[1]
-            elif line.startswith("HOSTNAME="):
-                hostname = line.strip().split("=")[1]
-
-        return Client(mac=mac, ips=ips, link=link, hostname=hostname)
 
     def add_iface(self, path):
         """ Add an interface to monitor
@@ -373,22 +416,20 @@ class VMNetProxy(object):
         """
         iface = os.path.basename(path)
 
-        logging.debug("Updating configuration for %s" % iface)
-        binding = self.parse_binding_file(path)
+        logging.debug("Updating configuration for %s", iface)
+        binding = parse_binding_file(path)
         ifindex = self.get_ifindex(iface)
 
         if ifindex is None:
-            logging.warn("Stale configuration for %s found" % iface)
+            logging.warn("Stale configuration for %s found", iface)
         else:
             if binding.is_valid():
                 binding.iface = iface
                 self.clients[binding.mac] = binding
-                self.subnets[binding.link] = self.parse_routing_table(
-                                                binding.link)
-                logging.debug("Added client %s on %s" %
-                              (binding.hostname, iface))
+                self.subnets[binding.link] = parse_routing_table(binding.link)
+                logging.debug("Added client %s on %s", binding.hostname, iface)
                 self.ifaces[ifindex] = iface
-                self.v6nets[iface] = self.parse_routing_table(binding.link, 6)
+                self.v6nets[iface] = parse_routing_table(binding.link, 6)
 
     def remove_iface(self, iface):
         """ Cleanup clients on a removed interface
@@ -405,9 +446,9 @@ class VMNetProxy(object):
             if self.ifaces[ifindex] == iface:
                 del self.ifaces[ifindex]
 
-        logging.debug("Removed interface %s" % iface)
+        logging.debug("Removed interface %s", iface)
 
-    def dhcp_response(self, i, payload):
+    def dhcp_response(self, i, payload): # pylint: disable=W0613,R0914
         """ Generate a reply to a BOOTP/DHCP request
 
         """
@@ -433,13 +474,12 @@ class VMNetProxy(object):
         try:
             binding = self.clients[mac]
         except KeyError:
-            logging.warn("Invalid client %s on %s" % (mac, iface))
+            logging.warn("Invalid client %s on %s", mac, iface)
             return
 
         if iface != binding.iface:
             logging.warn("Received spoofed DHCP request for %s from interface"
-                         " %s instead of %s" %
-                         (mac, iface, binding.iface))
+                         " %s instead of %s", mac, iface, binding.iface)
             return
 
         resp = Ether(dst=mac, src=self.get_iface_hw_addr(iface))/\
@@ -449,7 +489,7 @@ class VMNetProxy(object):
 
         if not DHCP in pkt:
             logging.warn("Invalid request from %s on %s, no DHCP"
-                         " payload found" % (binding.mac, iface))
+                         " payload found", binding.mac, iface)
             return
 
         dhcp_options = []
@@ -460,14 +500,14 @@ class VMNetProxy(object):
             if type(opt) is tuple and opt[0] == "requested_addr":
                 requested_addr = opt[1]
 
-        logging.info("%s from %s on %s" %
-                    (DHCP_TYPES.get(req_type, "UNKNOWN"), binding.mac, iface))
+        logging.info("%s from %s on %s", DHCP_TYPES.get(req_type, "UNKNOWN"),
+                     binding.mac, iface)
 
         if req_type == DHCPREQUEST and requested_addr != binding.ip:
             resp_type = DHCPNAK
             logging.info("Sending DHCPNAK to %s on %s: requested %s"
-                         " instead of %s" %
-                         (binding.mac, iface, requested_addr, binding.ip))
+                         " instead of %s", binding.mac, iface, requested_addr,
+                         binding.ip)
 
         elif req_type in (DHCPDISCOVER, DHCPREQUEST):
             resp_type = DHCP_REQRESP[req_type]
@@ -493,8 +533,7 @@ class VMNetProxy(object):
 
         elif req_type == DHCPRELEASE:
             # Log and ignore
-            logging.info("DHCPRELEASE from %s on %s" %
-                         (binding.mac, iface))
+            logging.info("DHCPRELEASE from %s on %s", binding.mac, iface)
             return
 
         # Finally, always add the server identifier and end options
@@ -505,11 +544,11 @@ class VMNetProxy(object):
         ]
         resp /= DHCP(options=dhcp_options)
 
-        logging.info("%s to %s (%s) on %s" %
-                      (DHCP_TYPES[resp_type], mac, binding.ip, iface))
+        logging.info("%s to %s (%s) on %s", DHCP_TYPES[resp_type], mac,
+                     binding.ip, iface)
         sendp(resp, iface=iface, verbose=False)
 
-    def rs_response(self, i, payload):
+    def rs_response(self, i, payload): # pylint: disable=W0613
         """ Generate a reply to a BOOTP/DHCP request
 
         """
@@ -531,10 +570,10 @@ class VMNetProxy(object):
             resp /= ICMPv6NDOptRDNSS(dns=self.ipv6_nameservers,
                                      lifetime=self.ra_period * 3)
 
-        logging.info("RA on %s for %s" % (iface, subnet.net))
+        logging.info("RA on %s for %s", iface, subnet.net)
         sendp(resp, iface=iface, verbose=False)
 
-    def ns_response(self, i, payload):
+    def ns_response(self, i, payload): # pylint: disable=W0613
         """ Generate a reply to an ICMPv6 neighbor solicitation
 
         """
@@ -547,7 +586,7 @@ class VMNetProxy(object):
         ns = IPv6(payload.get_data())
 
         if not (subnet.net.overlaps(ns.tgt) or str(ns.tgt) == str(ifll)):
-            logging.debug("Received NS for a non-routable IP (%s)" % ns.tgt)
+            logging.debug("Received NS for a non-routable IP (%s)", ns.tgt)
             payload.set_verdict(nfqueue.NF_ACCEPT)
             return 1
 
@@ -563,7 +602,7 @@ class VMNetProxy(object):
                ICMPv6ND_NA(R=1, O=0, S=1, tgt=ns.tgt)/\
                ICMPv6NDOptDstLLAddr(lladdr=ifmac)
 
-        logging.info("NA on %s for %s" % (iface, ns.tgt))
+        logging.info("NA on %s for %s", iface, ns.tgt)
         sendp(resp, iface=iface, verbose=False)
         return 1
 
@@ -594,12 +633,12 @@ class VMNetProxy(object):
             try:
                 sendp(resp, iface=iface, verbose=False)
             except socket.error, e:
-                logging.warn("Periodic RA on %s failed: %s" % (iface, str(e)))
+                logging.warn("Periodic RA on %s failed: %s", iface, str(e))
             except Exception, e:
-                logging.warn("Unkown error during periodic RA on %s: %s" %
-                             (iface, str(e)))
+                logging.warn("Unkown error during periodic RA on %s: %s",
+                             iface, str(e))
             i += 1
-        logging.debug("Sent %d RAs in %.2f seconds" % (i, time.time() - start))
+        logging.debug("Sent %d RAs in %.2f seconds", i, time.time() - start)
 
     def serve(self):
         """ Loop forever, serving DHCP requests
@@ -607,7 +646,9 @@ class VMNetProxy(object):
         """
         self.build_config()
 
-        iwfd = self.notifier._fd
+        # Yes, we are accessing _fd directly, but it's the only way to have a 
+        # single select() loop ;-)
+        iwfd = self.notifier._fd # pylint: disable=W0212
 
         start = time.time()
         if self.ipv6_enabled:
@@ -619,7 +660,7 @@ class VMNetProxy(object):
         while True:
             rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
             if xlist:
-                logging.warn("Warning: Exception on %s" %
+                logging.warn("Warning: Exception on %s",
                              ", ".join([ str(fd) for fd in xlist]))
 
             if rlist:
@@ -633,9 +674,11 @@ class VMNetProxy(object):
                 for fd in rlist:
                     try:
                         self.nfq[fd].process_pending()
+                    except RuntimeError, e:
+                        logging.warn("Error processing fd %d: %s", fd, str(e))
                     except Exception, e:
-                        logging.warn("Error processing fd %d: %s" %
-                                     (fd, str(e)))
+                        logging.warn("Unknown error processing fd %d: %s",
+                                     fd, str(e))
 
             if self.ipv6_enabled:
                 # Calculate the new timeout
@@ -648,9 +691,9 @@ class VMNetProxy(object):
 
 
 if __name__ == "__main__":
+    import capng
     import optparse
     from cStringIO import StringIO
-    from capng import *
     from pwd import getpwnam, getpwuid
     from configobj import ConfigObj, ConfigObjError, flatten_errors
 
@@ -702,20 +745,20 @@ if __name__ == "__main__":
 
     try:
         config = ConfigObj(opts.config_file, configspec=config_spec)
-    except ConfigObjError, e:
+    except ConfigObjError, err:
         sys.stderr.write("Failed to parse config file %s: %s" %
-                         (opts.config_file, str(e)))
+                         (opts.config_file, str(err)))
         sys.exit(1)
 
     results = config.validate(validator)
     if results != True:
         logging.fatal("Configuration file validation failed! See errors below:")
-        for (section_list, key, _) in flatten_errors(config, results):
+        for (section_list, key, unused) in flatten_errors(config, results):
             if key is not None:
-                logging.fatal(" '%s' in section '%s' failed validation" %
-                              (key, ", ".join(section_list)))
+                logging.fatal(" '%s' in section '%s' failed validation",
+                              key, ", ".join(section_list))
             else:
-                logging.fatal(" Section '%s' is missing" %
+                logging.fatal(" Section '%s' is missing",
                               ", ".join(section_list))
         sys.exit(1)
 
@@ -749,6 +792,7 @@ if __name__ == "__main__":
             "ipv6_nameservers": config["ipv6"]["nameservers"],
         })
 
+    # pylint: disable=W0142
     proxy = VMNetProxy(data_path=config["general"]["datapath"], **proxy_opts)
 
     # Drop all capabilities except CAP_NET_RAW and change uid
@@ -758,12 +802,14 @@ if __name__ == "__main__":
         uid = getpwnam(config["general"]["user"])
 
     logging.debug("Setting capabilities and changing uid")
-    logging.debug("User: %s, uid: %d, gid: %d" %
-                  (config["general"]["user"], uid.pw_uid, uid.pw_gid))
-    capng_clear(CAPNG_SELECT_BOTH)
-    capng_update(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED, CAP_NET_RAW)
-    capng_change_id(uid.pw_uid, uid.pw_gid,
-                    CAPNG_DROP_SUPP_GRP | CAPNG_CLEAR_BOUNDING)
+    logging.debug("User: %s, uid: %d, gid: %d",
+                  config["general"]["user"], uid.pw_uid, uid.pw_gid)
+    capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+    capng.capng_update(capng.CAPNG_ADD,
+                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
+                       capng.CAP_NET_RAW)
+    capng.capng_change_id(uid.pw_uid, uid.pw_gid,
+                          capng.CAPNG_DROP_SUPP_GRP|capng.CAPNG_CLEAR_BOUNDING)
 
     if opts.daemonize:
         logfile = os.path.join(config["general"]["logdir"], LOG_FILENAME)
