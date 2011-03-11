@@ -662,7 +662,7 @@ if __name__ == "__main__":
         try:
             family = int(family)
         except ValueError:
-            raise vaildate.VdtParamError(family)
+            raise validate.VdtParamError(family)
         if isinstance(value, (str, unicode)):
             value = [value]
         if not isinstance(value, list):
