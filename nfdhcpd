@@ -182,7 +182,7 @@ class ClientFileHandler(pyinotify.ProcessEvent):
         pyinotify.ProcessEvent.__init__(self)
         self.server = server
 
-    def process_IN_DELETE(self, event):
+    def process_IN_DELETE(self, event): # pylint: disable=C0103
         """ Delete file handler
 
         Currently this removes an interface from the watch list
@@ -190,7 +190,7 @@ class ClientFileHandler(pyinotify.ProcessEvent):
         """
         self.server.remove_iface(event.name)
 
-    def process_IN_CLOSE_WRITE(self, event):
+    def process_IN_CLOSE_WRITE(self, event): # pylint: disable=C0103
         """ Add file handler
 
         Currently this adds an interface to the watch list
