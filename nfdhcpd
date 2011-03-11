@@ -33,6 +33,7 @@ import nfqueue
 import pyinotify
 
 import IPy
+import socket
 from select import select
 from socket import AF_INET, AF_INET6
 
@@ -255,11 +256,25 @@ class VMNetProxy(object):
 
         try:
             f = open(file, 'r')
-            ifindex = int(f.readline().strip())
-            f.close()
-        except IOError:
-            logging.debug("%s is down, removing" % iface)
+        except EnvironmentError:
+            logging.debug("%s is probably down, removing" % iface)
             self.remove_iface(iface)
+
+            return ifindex
+
+        try:
+            ifindex = f.readline().strip()
+            try:
+                ifindex = int(ifindex)
+            except ValueError, e:
+                logging.warn("Failed to get ifindex for %s, cannot parse sysfs"
+                             " output '%s'" % (iface, ifindex))
+        except EnvironmentError, e:
+            logging.warn("Error reading %s's ifindex from sysfs: %s" %
+                         (iface, str(e)))
+            self.remove_iface(iface)
+        finally:
+            f.close()
 
         return ifindex
 
@@ -275,11 +290,18 @@ class VMNetProxy(object):
         addr = None
         try:
             f = open(file, 'r')
-            addr = f.readline().strip()
-            f.close()
-        except IOError:
-            logging.debug("%s is down, removing" % iface)
+        except EnvironmentError:
+            logging.debug("%s is probably down, removing" % iface)
             self.remove_iface(iface)
+            return addr
+
+        try:
+            addr = f.readline().strip()
+        except EnvironmentError, e:
+            logging.warn("Failed to read hw address for %s from sysfs: %s" %
+                         (iface, str(e)))
+        finally:
+            f.close()
 
         return addr
 
@@ -304,12 +326,16 @@ class VMNetProxy(object):
 
         for route in routes:
             # Find the least-specific connected route
+            m = re.match("^([^\\s]+) dev %s" % def_dev, route)
+            if not m:
+                continue
+            def_net = m.groups(1)
+
             try:
-                def_net = re.match("^([^\\s]+) dev %s" %
-                                   def_dev, route).groups()[0]
                 def_net = IPy.IP(def_net)
-            except:
-                pass
+            except ValueError, e:
+                logging.warn("Unable to parse default route entry %s: %s" %
+                             (def_net, str(e)))
 
         return Subnet(net=def_net, gw=def_gw, dev=def_dev)
 
@@ -319,8 +345,10 @@ class VMNetProxy(object):
         """
         try:
             iffile = open(path, 'r')
-        except:
+        except EnvironmentError, e:
+            logging.warn("Unable to open binding file %s: %s" % (path, str(e)))
             return (None, None, None, None)
+
         mac = None
         ips = None
         link = None
@@ -565,8 +593,11 @@ class VMNetProxy(object):
                                          lifetime=self.ra_period * 3)
             try:
                 sendp(resp, iface=iface, verbose=False)
-            except:
-                logging.debug("Periodic RA on %s failed" % iface)
+            except socket.error, e:
+                logging.warn("Periodic RA on %s failed: %s" % (iface, str(e)))
+            except Exception, e:
+                logging.warn("Unkown error during periodic RA on %s: %s" %
+                             (iface, str(e)))
             i += 1
         logging.debug("Sent %d RAs in %.2f seconds" % (i, time.time() - start))
 
@@ -602,8 +633,9 @@ class VMNetProxy(object):
                 for fd in rlist:
                     try:
                         self.nfq[fd].process_pending()
-                    except e, msg:
-                        logging.warn("Error processing fd %d: %s" % (fd, e))
+                    except Exception, e:
+                        logging.warn("Error processing fd %d: %s" %
+                                     (fd, str(e)))
 
             if self.ipv6_enabled:
                 # Calculate the new timeout
@@ -620,7 +652,7 @@ if __name__ == "__main__":
     from cStringIO import StringIO
     from capng import *
     from pwd import getpwnam, getpwuid
-    from configobj import ConfigObj, flatten_errors
+    from configobj import ConfigObj, ConfigObjError, flatten_errors
 
     import validate
 
@@ -669,8 +701,9 @@ if __name__ == "__main__":
 
     try:
         config = ConfigObj(opts.config_file, configspec=config_spec)
-    except:
-        sys.stderr.write("Failed to parse config file %s" % opts.config_file)
+    except ConfigObjError, e:
+        sys.stderr.write("Failed to parse config file %s: %s" %
+                         (opts.config_file, str(e)))
         sys.exit(1)
 
     results = config.validate(validator)
