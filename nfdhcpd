@@ -688,8 +688,9 @@ if __name__ == "__main__":
                       default=DEFAULT_CONFIG)
     parser.add_option("-d", "--debug", action="store_true", dest="debug",
                       help="Turn on debugging messages")
-    parser.add_option("-f", "--foreground", action="store_false", dest="daemonize",
-                      default=True, help="Do not daemonize, stay in the foreground")
+    parser.add_option("-f", "--foreground", action="store_false",
+                      dest="daemonize", default=True,
+                      help="Do not daemonize, stay in the foreground")
 
 
     opts, args = parser.parse_args()
@@ -711,9 +712,11 @@ if __name__ == "__main__":
         logging.fatal("Configuration file validation failed! See errors below:")
         for (section_list, key, _) in flatten_errors(config, results):
             if key is not None:
-                logging.fatal(" '%s' in section '%s' failed validation" % (key, ", ".join(section_list)))
+                logging.fatal(" '%s' in section '%s' failed validation" %
+                              (key, ", ".join(section_list)))
             else:
-                logging.fatal(" Section '%s' is missing" % ", ".join(section_list))
+                logging.fatal(" Section '%s' is missing" %
+                              ", ".join(section_list))
         sys.exit(1)
 
     pidfile = open(config["general"]["pidfile"], "w")
