@@ -335,6 +335,24 @@ class VMNetProxy(object): # pylint: disable=R0902
             self._setup_nfqueue(ns_queue_num, AF_INET6, self.ns_response)
             self.ipv6_enabled = True
 
+    def _cleanup(self):
+        """ Free all resources for a graceful exit
+
+        """
+        logging.info("Cleaning up")
+
+        logging.debug("Closing netfilter queues")
+        for q in self.nfq.values():
+            q.close()
+
+        logging.debug("Closing socket")
+        self.l2socket.close()
+
+        logging.debug("Stopping inotify watches")
+        self.notifier.stop()
+
+        logging.info("Cleanup finished")
+
     def _setup_nfqueue(self, queue_num, family, callback):
         logging.debug("Setting up NFQUEUE for queue %d, AF %s",
                       queue_num, family)
@@ -659,6 +677,15 @@ class VMNetProxy(object): # pylint: disable=R0902
         logging.debug("Sent %d RAs in %.2f seconds", i, time.time() - start)
 
     def serve(self):
+        """ Safely perform the main loop, freeing all resources upon exit
+
+        """
+        try:
+            self._serve()
+        finally:
+            self._cleanup()
+
+    def _serve(self):
         """ Loop forever, serving DHCP requests
 
         """
