@@ -38,6 +38,8 @@ import socket
 from select import select
 from socket import AF_INET, AF_INET6
 
+from scapy.data import ETH_P_ALL
+from scapy.packet import BasePacket
 from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
@@ -45,7 +47,6 @@ from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
                                ICMPv6NDOptPrefixInfo, \
                                ICMPv6NDOptRDNSS
 from scapy.layers.dhcp import BOOTP, DHCP
-from scapy.sendrecv import sendp
 
 DEFAULT_CONFIG = "/etc/nfdhcpd/nfdhcpd.conf"
 DEFAULT_PATH = "/var/run/ganeti-dhcpd"
@@ -310,6 +311,9 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.ifaces = {}
         self.v6nets = {}
         self.nfq = {}
+        self.l2socket = socket.socket(socket.AF_PACKET,
+                                      socket.SOCK_RAW, ETH_P_ALL)
+        self.l2socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 0)
 
         # Inotify setup
         self.wm = pyinotify.WatchManager()
@@ -341,6 +345,20 @@ class VMNetProxy(object): # pylint: disable=R0902
         # This is mandatory for the queue to operate
         q.set_mode(nfqueue.NFQNL_COPY_PACKET)
         self.nfq[q.get_fd()] = q
+
+    def sendp(self, data, iface):
+        """ Send a raw packet using a layer-2 socket
+
+        """
+        if isinstance(data, BasePacket):
+            data = str(data)
+
+        self.l2socket.bind((iface, ETH_P_ALL))
+        count = self.l2socket.send(data)
+        ldata = len(data)
+        if count != ldata:
+            logging.warn("Truncated send on %s (%d/%d bytes sent)",
+                         iface, count, ldata)
 
     def build_config(self):
         self.clients.clear()
@@ -546,7 +564,7 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         logging.info("%s to %s (%s) on %s", DHCP_TYPES[resp_type], mac,
                      binding.ip, iface)
-        sendp(resp, iface=iface, verbose=False)
+        self.sendp(resp, iface)
 
     def rs_response(self, i, payload): # pylint: disable=W0613
         """ Generate a reply to a BOOTP/DHCP request
@@ -571,7 +589,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                                      lifetime=self.ra_period * 3)
 
         logging.info("RA on %s for %s", iface, subnet.net)
-        sendp(resp, iface=iface, verbose=False)
+        self.sendp(resp, iface)
 
     def ns_response(self, i, payload): # pylint: disable=W0613
         """ Generate a reply to an ICMPv6 neighbor solicitation
@@ -603,7 +621,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                ICMPv6NDOptDstLLAddr(lladdr=ifmac)
 
         logging.info("NA on %s for %s", iface, ns.tgt)
-        sendp(resp, iface=iface, verbose=False)
+        self.sendp(resp, iface)
         return 1
 
     def send_periodic_ra(self):
@@ -631,7 +649,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                 resp /= ICMPv6NDOptRDNSS(dns=self.ipv6_nameservers,
                                          lifetime=self.ra_period * 3)
             try:
-                sendp(resp, iface=iface, verbose=False)
+                self.sendp(resp, iface)
             except socket.error, e:
                 logging.warn("Periodic RA on %s failed: %s", iface, str(e))
             except Exception, e:
@@ -806,12 +824,8 @@ if __name__ == "__main__":
                   config["general"]["user"], uid.pw_uid, uid.pw_gid)
 
     # Keep only the capabilities we need
-    # CAP_NET_RAW: we need to send responses using SOCK_RAW
     # CAP_NET_ADMIN: we need to send nfqueue packet verdicts to a netlinkgroup
     capng.capng_clear(capng.CAPNG_SELECT_BOTH)
-    capng.capng_update(capng.CAPNG_ADD,
-                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
-                       capng.CAP_NET_RAW)
     capng.capng_update(capng.CAPNG_ADD,
                        capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
                        capng.CAP_NET_ADMIN)
