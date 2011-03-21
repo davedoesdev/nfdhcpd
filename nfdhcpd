@@ -157,7 +157,7 @@ def parse_binding_file(path):
         iffile = open(path, 'r')
     except EnvironmentError, e:
         logging.warn("Unable to open binding file %s: %s", path, str(e))
-        return (None, None, None, None)
+        return None
 
     mac = None
     ips = None
@@ -454,6 +454,8 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         logging.debug("Updating configuration for %s", iface)
         binding = parse_binding_file(path)
+        if binding is None:
+            return
         ifindex = self.get_ifindex(iface)
 
         if ifindex is None:
