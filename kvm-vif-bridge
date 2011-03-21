@@ -17,7 +17,7 @@ if [ "$MODE" == "routed" ]; then
 	# Add a routing entry for the eui-64
 	prefix=$(ip -6 route list table $LINK | grep -m 1 "/64" | awk '{ print $1 }')
 	uplink=$(ip -6 route list table $LINK | grep -m 1 default | sed 's/.* dev \([^ ]\+\).*/\1/')
-	eui64=$(/home/apollon/mac2eui64.py $MAC $prefix)
+	eui64=$(mac2eui64 $MAC $prefix)
 
 	while ip -6 rule del dev $INTERFACE; do :; done
 	ip -6 rule add dev $INTERFACE table $LINK
@@ -28,8 +28,8 @@ if [ "$MODE" == "routed" ]; then
 	iptables -D FORWARD -i $INTERFACE -p udp --dport 67 -j DROP 2>/dev/null
 	iptables -A FORWARD -i $INTERFACE -p udp --dport 67 -j DROP
 
-	# Generate the ganeti-dhcpd configuration
-	cat >/var/run/ganeti-dhcpd/$INTERFACE <<EOF
+	# Generate the client configuration
+	cat >/var/lib/nfdhcpd/$INTERFACE <<EOF
 IP=$IP
 MAC=$MAC
 LINK=$LINK
@@ -40,7 +40,7 @@ else
 	ifconfig $INTERFACE 0.0.0.0 up
 	# Add the interface to the bridge
 	brctl addif $BRIDGE $INTERFACE
-	if [ -f "/var/run/ganeti-dhcpd/$INTERFACE" ]; then
-		rm /var/run/ganeti-dhcpd/$INTERFACE
+	if [ -f "/var/run/nfdhcpd/$INTERFACE" ]; then
+		rm /var/run/nfdhcpd/$INTERFACE
 	fi
 fi
