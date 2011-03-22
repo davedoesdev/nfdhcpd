@@ -138,6 +138,11 @@ def parse_routing_table(table="main", family=4):
         m = re.match("^([^\\s]+) dev %s" % def_dev, route)
         if not m:
             continue
+
+        if family == 6 and m.group(1).startswith("fe80:"):
+            # Skip link-local declarations in "main" table
+            continue
+
         def_net = m.group(1)
 
         try:
