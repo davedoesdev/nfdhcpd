@@ -495,11 +495,21 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Generate a reply to a BOOTP/DHCP request
 
         """
+        indev = payload.get_indev()
+        try:
+            # Get the actual interface from the ifindex
+            iface = self.ifaces[indev]
+        except KeyError:
+            # We don't know anything about this interface, so accept the packet
+            # and return
+            logging.debug("Ignoring DHCP request on unknown iface %d", indev)
+            # We don't know what to do with this packet, so let the kernel
+            # handle it
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return
+
         # Decode the response - NFQUEUE relays IP packets
         pkt = IP(payload.get_data())
-
-        # Get the actual interface from the ifindex
-        iface = self.ifaces[payload.get_indev()]
 
         # Signal the kernel that it shouldn't further process the packet
         payload.set_verdict(nfqueue.NF_DROP)
@@ -595,8 +605,18 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Generate a reply to a BOOTP/DHCP request
 
         """
-        # Get the actual interface from the ifindex
-        iface = self.ifaces[payload.get_indev()]
+        indev = payload.get_indev()
+        try:
+            # Get the actual interface from the ifindex
+            iface = self.ifaces[indev]
+        except KeyError:
+            logging.debug("Ignoring router solicitation on"
+                          " unknown interface %d", indev)
+            # We don't know what to do with this packet, so let the kernel
+            # handle it
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return
+
         ifmac = self.get_iface_hw_addr(iface)
         subnet = self.v6nets[iface]
         ifll = subnet.make_ll64(ifmac)
@@ -620,8 +640,18 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Generate a reply to an ICMPv6 neighbor solicitation
 
         """
-        # Get the actual interface from the ifindex
-        iface = self.ifaces[payload.get_indev()]
+        indev = payload.get_indev()
+        try:
+            # Get the actual interface from the ifindex
+            iface = self.ifaces[indev]
+        except KeyError:
+            logging.debug("Ignoring neighbour solicitation on"
+                          " unknown interface %d", indev)
+            # We don't know what to do with this packet, so let the kernel
+            # handle it
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return
+
         ifmac = self.get_iface_hw_addr(iface)
         subnet = self.v6nets[iface]
         ifll = subnet.make_ll64(ifmac)
