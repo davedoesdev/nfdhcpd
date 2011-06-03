@@ -27,6 +27,7 @@ import time
 import logging
 import logging.handlers
 import threading
+import traceback
 import subprocess
 
 import daemon
@@ -912,7 +913,13 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     logging.info("Ready to serve requests")
-    proxy.serve()
+    try:
+        proxy.serve()
+    except Exception:
+        if opts.daemonize:
+            exc = "".join(traceback.format_exception(*sys.exc_info()))
+            logging.critical(exc)
+        raise
 
 
 # vim: set ts=4 sts=4 sw=4 et :
