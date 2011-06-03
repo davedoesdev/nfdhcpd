@@ -695,6 +695,11 @@ class VMNetProxy(object): # pylint: disable=R0902
                 continue
 
             subnet = self.v6nets[iface]
+            if subnet.net is None:
+                logging.debug("Skipping periodic RA on interface %s,"
+                              " as it is not IPv6-connected", iface)
+                continue
+
             ifll = subnet.make_ll64(ifmac)
             resp = Ether(src=ifmac)/\
                    IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
