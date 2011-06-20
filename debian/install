@@ -1,0 +1,3 @@
+nfdhcpd.conf etc/nfdhcpd
+nfdhcpd usr/sbin
+mac2eui64 usr/bin

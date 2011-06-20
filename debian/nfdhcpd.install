@@ -1,0 +1,4 @@
+nfdhcpd usr/sbin
+nfdhcpd.ferm etc/ferm/
+nfdhcpd.conf etc/nfdhcpd
+kvm-vif-bridge usr/share/doc/nfdhcpd/examples

@@ -1,0 +1,26 @@
+nfdhcpd (0.4) unstable; urgency=low
+
+  * Ignore IPv6 link-local subnets
+  * Handle invalid binding files in a more robust way 
+
+ -- Apollon Oikonomopoulos <apollon@noc.grnet.gr>  Mon, 28 Mar 2011 12:58:20 +0300
+
+nfdhcpd (0.3) unstable; urgency=low
+
+  * New version
+  * Improved error handling
+  * Refactored code for improved performance 
+
+ -- Apollon Oikonomopoulos <apollon@noc.grnet.gr>  Fri, 11 Mar 2011 14:29:41 +0200
+
+nfdhcpd (0.2) unstable; urgency=low
+
+  * Various improvements, including configuration file support and RDNSS support 
+
+ -- Apollon Oikonomopoulos <apollon@noc.grnet.gr>  Fri, 03 Dec 2010 16:20:17 +0200
+
+nfdhcpd (0.1) unstable; urgency=low
+
+  * Initial Release.
+
+ -- Apollon Oikonomopoulos <apollon@noc.grnet.gr>  Mon, 15 Nov 2010 12:42:53 +0200
