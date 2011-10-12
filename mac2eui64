@@ -13,6 +13,7 @@ try:
     prefix = IP(sys.argv[2])
 except ValueError:
     sys.stderr.write("Invalid IPv6 prefix '%s'\n" % sys.argv[2])
+    sys.exit(1)
     
 
 if prefix.version() != 6:
