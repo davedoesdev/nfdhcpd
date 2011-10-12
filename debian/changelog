@@ -1,3 +1,11 @@
+nfdhcpd (0.5) unstable; urgency=low
+
+  * Enable logging of unhandled exceptions
+  * Do not send periodic RAs on IPv6-less interfaces
+  * Ignore requests on unknown interfaces
+
+ -- Apollon Oikonomopoulos <apollon@noc.grnet.gr>  Wed, 22 Jun 2011 16:08:29 +0300
+
 nfdhcpd (0.4) unstable; urgency=low
 
   * Ignore IPv6 link-local subnets
