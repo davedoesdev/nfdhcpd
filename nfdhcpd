@@ -31,6 +31,7 @@ import traceback
 import subprocess
 
 import daemon
+import daemon.pidlockfile
 import nfqueue
 import pyinotify
 
@@ -826,11 +827,6 @@ if __name__ == "__main__":
 
     opts, args = parser.parse_args()
 
-    if opts.daemonize:
-        d = daemon.DaemonContext()
-        d.umask = 0022
-        d.open()
-
     try:
         config = ConfigObj(opts.config_file, configspec=config_spec)
     except ConfigObjError, err:
@@ -850,15 +846,32 @@ if __name__ == "__main__":
                               ", ".join(section_list))
         sys.exit(1)
 
-    pidfile = open(config["general"]["pidfile"], "w")
-    pidfile.write("%s" % os.getpid())
-    pidfile.close()
-
     logger = logging.getLogger()
     if opts.debug:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
+
+    if opts.daemonize:
+        logfile = os.path.join(config["general"]["logdir"], LOG_FILENAME)
+        handler = logging.handlers.RotatingFileHandler(logfile,
+                                                       maxBytes=2097152)
+    else:
+        handler = logging.StreamHandler()
+
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    logger.addHandler(handler)
+
+    if opts.daemonize:
+        pidfile = daemon.pidlockfile.TimeoutPIDLockFile
+            config["general"]["pidfile"], 10)
+
+        d = daemon.DaemonContext(pidfile=pidfile,
+                                 stdout=handler.stream,
+                                 stderr=handler.stream,
+                                 files_preserve=[handler.stream])
+        d.umask = 0022
+        d.open()
 
     logging.info("Starting up")
 
@@ -901,16 +914,6 @@ if __name__ == "__main__":
                        capng.CAP_NET_ADMIN)
     capng.capng_change_id(uid.pw_uid, uid.pw_gid,
                           capng.CAPNG_DROP_SUPP_GRP|capng.CAPNG_CLEAR_BOUNDING)
-
-    if opts.daemonize:
-        logfile = os.path.join(config["general"]["logdir"], LOG_FILENAME)
-        handler = logging.handlers.RotatingFileHandler(logfile,
-                                                       maxBytes=2097152)
-    else:
-        handler = logging.StreamHandler()
-
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logger.addHandler(handler)
 
     logging.info("Ready to serve requests")
     try:
