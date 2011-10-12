@@ -1,3 +1,9 @@
+nfdhcpd (0.6) unstable; urgency=low
+
+  * Add mac2eui64 utility
+
+ -- Apollon Oikonomopoulos <apollon@noc.grnet.gr>  Wed, 22 Jun 2011 17:06:07 +0300
+
 nfdhcpd (0.5) unstable; urgency=low
 
   * Enable logging of unhandled exceptions

@@ -1,4 +1,5 @@
 nfdhcpd usr/sbin
+mac2eui64 usr/bin
 nfdhcpd.ferm etc/ferm/
 nfdhcpd.conf etc/nfdhcpd
 kvm-vif-bridge usr/share/doc/nfdhcpd/examples
