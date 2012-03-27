@@ -79,6 +79,7 @@ lease_renewal = integer(min=0, max=4294967295)
 server_ip = ip_addr()
 dhcp_queue = integer(min=0, max=65535)
 nameservers = ip_addr_list(family=4)
+domain = string(default=None)
 
 [ipv6]
 enable_ipv6 = boolean(default=True)
@@ -293,12 +294,14 @@ class VMNetProxy(object): # pylint: disable=R0902
                  rs_queue_num=None, ns_queue_num=None,
                  dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
                  dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
+                 dhcp_domain='',
                  dhcp_server_ip=DHCP_DUMMY_SERVER_IP, dhcp_nameservers=None,
                  ra_period=DEFAULT_RA_PERIOD, ipv6_nameservers=None):
 
         self.data_path = data_path
         self.lease_lifetime = dhcp_lease_lifetime
         self.lease_renewal = dhcp_lease_renewal
+        self.dhcp_domain = dhcp_domain
         self.dhcp_server_ip = dhcp_server_ip
         self.ra_period = ra_period
         if dhcp_nameservers is None:
@@ -558,6 +561,11 @@ class VMNetProxy(object): # pylint: disable=R0902
         logging.info("%s from %s on %s", DHCP_TYPES.get(req_type, "UNKNOWN"),
                      binding.mac, iface)
 
+        if self.dhcp_domain:
+            domainname = self.dhcp_domain
+        else:
+            domainname = binding.hostname.split('.', 1)[-1]
+
         if req_type == DHCPREQUEST and requested_addr != binding.ip:
             resp_type = DHCPNAK
             logging.info("Sending DHCPNAK to %s on %s: requested %s"
@@ -569,7 +577,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp.yiaddr = self.clients[mac].ip
             dhcp_options += [
                  ("hostname", binding.hostname),
-                 ("domain", binding.hostname.split('.', 1)[-1]),
+                 ("domain", domainname),
                  ("router", subnet.gw),
                  ("broadcast_address", str(subnet.broadcast)),
                  ("subnet_mask", str(subnet.netmask)),
@@ -582,7 +590,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp_type = DHCP_REQRESP[req_type]
             dhcp_options += [
                  ("hostname", binding.hostname),
-                 ("domain", binding.hostname.split('.', 1)[-1]),
+                 ("domain", domainname),
             ]
             dhcp_options += [("name_server", x) for x in self.dhcp_nameservers]
 
@@ -735,7 +743,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         """
         self.build_config()
 
-        # Yes, we are accessing _fd directly, but it's the only way to have a 
+        # Yes, we are accessing _fd directly, but it's the only way to have a
         # single select() loop ;-)
         iwfd = self.notifier._fd # pylint: disable=W0212
 
@@ -883,6 +891,7 @@ if __name__ == "__main__":
             "dhcp_lease_renewal": config["dhcp"].as_int("lease_renewal"),
             "dhcp_server_ip": config["dhcp"]["server_ip"],
             "dhcp_nameservers": config["dhcp"]["nameservers"],
+            "dhcp_domain": config["dhcp"]["domain"],
         })
 
     if config["ipv6"].as_bool("enable_ipv6"):
