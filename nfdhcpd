@@ -871,7 +871,7 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     if opts.daemonize:
-        pidfile = daemon.pidlockfile.TimeoutPIDLockFile
+        pidfile = daemon.pidlockfile.TimeoutPIDLockFile(
             config["general"]["pidfile"], 10)
 
         d = daemon.DaemonContext(pidfile=pidfile,
