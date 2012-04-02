@@ -1,3 +1,10 @@
+nfdhcpd (0.6+nmu1) unstable; urgency=low
+
+  * Support for serving domain
+  * Fixed a typo
+
+ -- Costas Drogos <costasd@noc.grnet.gr>  Mon, 02 Apr 2012 10:40:08 +0300
+
 nfdhcpd (0.6) unstable; urgency=low
 
   * Add mac2eui64 utility
