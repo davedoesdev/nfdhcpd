@@ -1,3 +1,9 @@
+nfdhcpd (0.6+nmu2) unstable; urgency=low
+
+  * Patches from Vangelis Koukis for pidfile permissions
+
+ -- Costas Drogos <costasd@noc.grnet.gr>  Tue, 03 Apr 2012 16:41:23 +0300
+
 nfdhcpd (0.6+nmu1) unstable; urgency=low
 
   * Support for serving domain

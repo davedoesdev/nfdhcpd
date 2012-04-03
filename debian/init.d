@@ -102,6 +102,12 @@ running() {
 }
 
 start_server() {
+	# /var/run may be volatile, so we need to ensure that
+	# /var/run/$NAME exists here as well as in postinst
+	if [ ! -d /var/run/$NAME ]; then
+	   mkdir /var/run/$NAME || return 1
+	   chown nobody:nogroup /var/run/$NAME || return 1
+	fi
 	start_daemon -p $PIDFILE $DAEMON $DAEMON_OPTS
 	errcode=$?
 	return $errcode
