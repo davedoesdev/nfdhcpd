@@ -207,6 +207,15 @@ class ClientFileHandler(pyinotify.ProcessEvent):
         """
         self.server.add_iface(os.path.join(event.path, event.name))
 
+    def process_IN_Q_OVERFLOW(self, event): # pylint: disable=C0103
+        """ Event overflow handler
+
+        Currently this reads all interface configs
+
+        """
+        for path in glob.glob(os.path.join(self.server.data_path, "*")):
+            self.server.add_iface(path)
+
 
 class Client(object):
     def __init__(self, mac=None, ips=None, link=None, hostname=None):
@@ -329,6 +338,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.wm = pyinotify.WatchManager()
         mask = pyinotify.EventsCodes.ALL_FLAGS["IN_DELETE"]
         mask |= pyinotify.EventsCodes.ALL_FLAGS["IN_CLOSE_WRITE"]
+        mask |= pyinotify.EventsCodes.ALL_FLAGS["IN_Q_OVERFLOW"]
         inotify_handler = ClientFileHandler(self)
         self.notifier = pyinotify.Notifier(self.wm, inotify_handler)
         self.wm.add_watch(self.data_path, mask, rec=True)
@@ -500,7 +510,9 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Generate a reply to a BOOTP/DHCP request
 
         """
-        indev = payload.get_indev()
+        # If the packet comes from a bridged interface, use the ifindex
+        # of the physical device instead of the ifindex of the bridge interface
+        indev = payload.get_physindev() or payload.get_indev()
         try:
             # Get the actual interface from the ifindex
             iface = self.ifaces[indev]
@@ -541,7 +553,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         resp = Ether(dst=mac, src=self.get_iface_hw_addr(iface))/\
-               IP(src=DHCP_DUMMY_SERVER_IP, dst=binding.ip)/\
+               IP(src=self.dhcp_server_ip, dst=binding.ip)/\
                UDP(sport=pkt.dport, dport=pkt.sport)/resp
         subnet = self.subnets[binding.link]
 
@@ -602,7 +614,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         # Finally, always add the server identifier and end options
         dhcp_options += [
             ("message-type", resp_type),
-            ("server_id", DHCP_DUMMY_SERVER_IP),
+            ("server_id", self.dhcp_server_ip),
             "end"
         ]
         resp /= DHCP(options=dhcp_options)
@@ -615,7 +627,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Generate a reply to a BOOTP/DHCP request
 
         """
-        indev = payload.get_indev()
+        indev = payload.get_physindev() or payload.get_indev()
         try:
             # Get the actual interface from the ifindex
             iface = self.ifaces[indev]
@@ -650,7 +662,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Generate a reply to an ICMPv6 neighbor solicitation
 
         """
-        indev = payload.get_indev()
+        indev = payload.get_physindev() or payload.get_indev()
         try:
             # Get the actual interface from the ifindex
             iface = self.ifaces[indev]
