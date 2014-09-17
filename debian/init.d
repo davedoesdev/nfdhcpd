@@ -33,7 +33,7 @@ NAME=nfdhcpd
 DESC="NFQUEUE-based DHCP/RA server" 
 LOGDIR=/var/log/nfdhcpd
 
-PIDFILE=/var/run/$NAME.pid
+PIDFILE=/var/run/$NAME/$NAME.pid
 
 test -x $DAEMON || exit 0
 
