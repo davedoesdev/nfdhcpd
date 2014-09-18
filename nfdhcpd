@@ -87,6 +87,10 @@ ra_period = integer(min=1, max=4294967295)
 rs_queue = integer(min=0, max=65535)
 ns_queue = integer(min=0, max=65535)
 nameservers = ip_addr_list(family=6)
+
+[dns]
+enable_dns = boolean(default=False)
+dns_queue = integer(min=0, max=65535)
 """
 
 
@@ -271,8 +275,7 @@ class Client(object):
         return self.ips[0]
 
     def is_valid(self):
-        return self.mac is not None and self.ips is not None\
-               and self.hostname is not None
+        return self.mac is not None and self.ips is not None
 
 
 class Subnet(object):
@@ -340,7 +343,7 @@ class Subnet(object):
 
 class VMNetProxy(object): # pylint: disable=R0902
     def __init__(self, data_path, dhcp_queue_num=None, # pylint: disable=R0913
-                 rs_queue_num=None, ns_queue_num=None,
+                 rs_queue_num=None, ns_queue_num=None, dns_queue_num=None,
                  dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
                  dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
                  dhcp_domain='',
@@ -396,6 +399,9 @@ class VMNetProxy(object): # pylint: disable=R0902
         if ns_queue_num is not None:
             self._setup_nfqueue(ns_queue_num, AF_INET6, self.ns_response)
             self.ipv6_enabled = True
+
+        if dns_queue_num is not None:
+            self._setup_nfqueue(dns_queue_num, AF_INET, self.dns_response)
 
     def _cleanup(self):
         """ Free all resources for a graceful exit
@@ -536,7 +542,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                 else:
                     self.subnets[iface] = parse_routing_table(binding.link)
                     self.v6nets[iface] = parse_routing_table(binding.link, 6)
-                logging.debug("Added client %s on %s", binding.hostname, iface)
+                logging.debug("Added client %s on %s", binding.mac, iface)
                 self.ifaces[ifindex] = iface
                 self.rev_ifaces[iface] = ifindex
 
@@ -645,22 +651,23 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp_type = DHCP_REQRESP[req_type]
             resp.yiaddr = self.clients[mac].ip
             dhcp_options += [
-                 ("hostname", binding.hostname),
-                 ("router", subnet.gw),
                  ("broadcast_address", str(subnet.broadcast)),
                  ("subnet_mask", str(subnet.netmask)),
                  ("renewal_time", self.lease_renewal),
                  ("lease_time", self.lease_lifetime),
             ]
+            if binding.hostname:
+                dhcp_options += [("hostname", binding.hostname)]
             if domainname:
                 dhcp_options += [("domain", domainname)]
+            if subnet.gw:
+                dhcp_options += [("router", subnet.gw)]
             dhcp_options += [("name_server", x) for x in nameservers]
 
         elif req_type == DHCPINFORM:
             resp_type = DHCP_REQRESP[req_type]
-            dhcp_options += [
-                 ("hostname", binding.hostname),
-            ]
+            if binding.hostname:
+                dhcp_options += [("hostname", binding.hostname)]
             if domainname:
                 dhcp_options += [("domain", domainname)]
             dhcp_options += [("name_server", x) for x in nameservers]
@@ -756,14 +763,14 @@ class VMNetProxy(object): # pylint: disable=R0902
         if not (subnet.net.overlaps(ns.tgt) or str(ns.tgt) == str(ifll)):
             logging.debug("Received NS for a non-routable IP (%s)", ns.tgt)
             payload.set_verdict(nfqueue.NF_ACCEPT)
-            return 1
+            return
 
         payload.set_verdict(nfqueue.NF_DROP)
 
         try:
             client_lladdr = ns.lladdr
         except AttributeError:
-            return 1
+            return
 
         resp = Ether(src=ifmac, dst=client_lladdr)/\
                IPv6(src=str(ifll), dst=ns.src)/\
@@ -772,7 +779,138 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         logging.info("NA on %s for %s", iface, ns.tgt)
         self.sendp(resp, iface)
-        return 1
+        return
+
+    def dns_response(self, i, payload): # pylint: disable=W0613,R0914
+        """ Generate a reply to a DNS query
+
+        """
+        indev = payload.get_physindev() or payload.get_indev()
+        try:
+            # Get the actual interface from the ifindex
+            iface = self.ifaces[indev]
+        except KeyError:
+            # We don't know anything about this interface, so accept the packet
+            # and return
+            logging.debug("Ignoring DNS request on unknown iface %d", indev)
+            # We don't know what to do with this packet, so let the kernel
+            # handle it
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return
+
+        # Decode the response - NFQUEUE relays IP packets
+        pkt = IP(payload.get_data())
+
+        # Signal the kernel that it shouldn't further process the packet
+        payload.set_verdict(nfqueue.NF_DROP)
+
+        logging.debug("GOT DNS PACKET!")
+
+        return
+
+        # Get the client MAC address
+        resp = pkt.getlayer(BOOTP).copy()
+        hlen = resp.hlen
+        mac = resp.chaddr[:hlen].encode("hex")
+        mac, _ = re.subn(r'([0-9a-fA-F]{2})', r'\1:', mac, hlen-1)
+
+        # Server responses are always BOOTREPLYs
+        resp.op = "BOOTREPLY"
+        del resp.payload
+
+        try:
+            binding = self.clients[mac]
+        except KeyError:
+            logging.warn("Invalid client %s on %s", mac, iface)
+            return
+
+        if iface != binding.iface:
+            logging.warn("Received spoofed DHCP request for %s from interface"
+                         " %s instead of %s", mac, iface, binding.iface)
+            return
+
+        ifmac = self.get_iface_hw_addr(iface)
+        if not ifmac:
+            return
+
+        resp = Ether(dst=mac, src=ifmac)/\
+               IP(src=binding.server_ip or self.dhcp_server_ip,
+                  dst=binding.ip)/\
+               UDP(sport=pkt.dport, dport=pkt.sport)/resp
+        subnet = self.subnets[iface]
+
+        if not DHCP in pkt:
+            logging.warn("Invalid request from %s on %s, no DHCP"
+                         " payload found", binding.mac, iface)
+            return
+
+        dhcp_options = []
+        requested_addr = binding.ip
+        for opt in pkt[DHCP].options:
+            if type(opt) is tuple and opt[0] == "message-type":
+                req_type = opt[1]
+            if type(opt) is tuple and opt[0] == "requested_addr":
+                requested_addr = opt[1]
+
+        logging.info("%s from %s on %s", DHCP_TYPES.get(req_type, "UNKNOWN"),
+                     binding.mac, iface)
+
+        domainname = binding.domain or self.dhcp_domain
+        nameservers = binding.nameservers or self.dhcp_nameservers
+
+        if req_type == DHCPREQUEST and requested_addr != binding.ip:
+            resp_type = DHCPNAK
+            logging.info("Sending DHCPNAK to %s on %s: requested %s"
+                         " instead of %s", binding.mac, iface, requested_addr,
+                         binding.ip)
+
+        elif req_type in (DHCPDISCOVER, DHCPREQUEST):
+            resp_type = DHCP_REQRESP[req_type]
+            resp.yiaddr = self.clients[mac].ip
+            dhcp_options += [
+                 ("hostname", binding.hostname),
+                 ("router", subnet.gw),
+                 ("broadcast_address", str(subnet.broadcast)),
+                 ("subnet_mask", str(subnet.netmask)),
+                 ("renewal_time", self.lease_renewal),
+                 ("lease_time", self.lease_lifetime),
+            ]
+            if domainname:
+                dhcp_options += [("domain", domainname)]
+            dhcp_options += [("name_server", x) for x in nameservers]
+
+        elif req_type == DHCPINFORM:
+            resp_type = DHCP_REQRESP[req_type]
+            dhcp_options += [
+                 ("hostname", binding.hostname),
+            ]
+            if domainname:
+                dhcp_options += [("domain", domainname)]
+            dhcp_options += [("name_server", x) for x in nameservers]
+
+        elif req_type == DHCPRELEASE:
+            # Log and ignore
+            logging.info("DHCPRELEASE from %s on %s", binding.mac, iface)
+            return
+
+        # Finally, always add the server identifier and end options
+        dhcp_options += [
+            ("message-type", resp_type),
+            ("server_id", binding.server_ip or self.dhcp_server_ip),
+            "end"
+        ]
+        resp /= DHCP(options=dhcp_options)
+
+        logging.info("%s to %s (%s) on %s", DHCP_TYPES[resp_type], mac,
+                     binding.ip, iface)
+        self.sendp(resp, iface)
+
+
+
+
+
+
+
 
     def send_periodic_ra(self):
         # Use a separate thread as this may take a _long_ time with
@@ -988,6 +1126,11 @@ if __name__ == "__main__":
             "ns_queue_num": config["ipv6"].as_int("ns_queue"),
             "ra_period": config["ipv6"].as_int("ra_period"),
             "ipv6_nameservers": config["ipv6"]["nameservers"],
+        })
+
+    if config["dns"].as_bool("enable_dns"):
+        proxy_opts.update({
+            "dns_queue_num": config["dns"].as_int("dns_queue")
         })
 
     # pylint: disable=W0142
