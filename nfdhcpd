@@ -60,8 +60,6 @@ DEFAULT_LEASE_RENEWAL = 600  # 10 min
 DEFAULT_RA_PERIOD = 300 # seconds
 DEFAULT_DNS_TTL = 10 # seconds
 DEFAULT_DNS_FORWARD = False
-DHCP_DUMMY_SERVER_IP = "1.2.3.4"
-DNS_DUMMY_SERVER_IP = "1.2.3.4"
 
 LOG_FILENAME = "nfdhcpd.log"
 
@@ -81,9 +79,9 @@ user = string()
 enable_dhcp = boolean(default=True)
 lease_lifetime = integer(min=0, max=4294967295)
 lease_renewal = integer(min=0, max=4294967295)
-server_ip = ip_addr()
+server_ip = ip_addr(default=None)
 dhcp_queue = integer(min=0, max=65535)
-nameservers = ip_addr_list(family=4)
+nameservers = ip_addr_list(family=4, default=None)
 domain = string(default=None)
 
 [ipv6]
@@ -91,13 +89,14 @@ enable_ipv6 = boolean(default=True)
 ra_period = integer(min=1, max=4294967295)
 rs_queue = integer(min=0, max=65535)
 ns_queue = integer(min=0, max=65535)
-nameservers = ip_addr_list(family=6)
+nameservers = ip_addr_list(family=6, default=None)
 
 [dns]
 enable_dns = boolean(default=False)
 dns_queue = integer(min=0, max=65535)
 dns6_queue = integer(min=0, max=65535)
-server_ip = ip_addr()
+server_ip = ip_addr(default=None)
+server_ip6 = ip6_addr(default=None)
 ttl = integer(min=0, max=2147483647, default=10)
 forward = boolean(default=False)
 
@@ -194,6 +193,7 @@ def parse_binding_file(path):
     gateway6 = None
     dhcp_server_ip = None
     dns_server_ip = None
+    dns_server_ip6 = None
     nameservers = None
     nameservers6 = None
     domain = None
@@ -226,6 +226,8 @@ def parse_binding_file(path):
             dhcp_server_ip = line.strip().split("=")[1]
         elif line.startswith("DNS_SERVER_IP="):
             dns_server_ip = line.strip().split("=")[1]
+        elif line.startswith("DNS_SERVER_IP6="):
+            dns_server_ip6 = line.strip().split("=")[1]
         elif line.startswith("NAMESERVERS="):
             nameservers = line.strip().split("=")[1]
             nameservers = [ns.strip() for ns in nameservers.split(",")]
@@ -251,7 +253,7 @@ def parse_binding_file(path):
                   subnet6=subnet6, gateway6=gateway6,
                   dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
                   nameservers6=nameservers6, domain=domain,
-                  dns_server_ip=dns_server_ip,
+                  dns_server_ip=dns_server_ip, dns_server_ip6=dns_server_ip6,
                   addresses=addresses, addresses6=addresses6,
                   dns_ttl=dns_ttl, dns_forward=dns_forward)
 
@@ -291,8 +293,8 @@ class Client(object):
     def __init__(self, mac=None, ips=None, link=None, hostname=None,
                  subnet=None, gateway=None, subnet6=None, gateway6=None,
                  dhcp_server_ip=None, nameservers=None, nameservers6=None,
-                 domain=None, dns_server_ip=None, dns_ttl=None,
-                 dns_forward=None, addresses={}, addresses6={}):
+                 domain=None, dns_server_ip=None, dns_server_ip6=None,
+                 dns_ttl=None, dns_forward=None, addresses={}, addresses6={}):
         self.mac = mac
         self.ips = ips
         self.hostname = hostname
@@ -303,6 +305,7 @@ class Client(object):
         self.gateway6 = gateway6
         self.dhcp_server_ip = dhcp_server_ip
         self.dns_server_ip = dns_server_ip
+        self.dns_server_ip6 = dns_server_ip6
         self.dns_ttl = dns_ttl
         self.dns_forward = dns_forward
         self.nameservers = nameservers
@@ -318,6 +321,25 @@ class Client(object):
 
     def is_valid(self):
         return self.mac is not None
+
+
+def make_eui64(net, mac):
+    """ Compute an EUI-64 address from an EUI-48 (MAC) address
+
+    """
+    comp = mac.split(":")
+    prefix = IPy.IP(net).net().strFullsize().split(":")[:4]
+    eui64 = comp[:3] + ["ff", "fe"] + comp[3:]
+    eui64[0] = "%02x" % (int(eui64[0], 16) ^ 0x02)
+    for l in range(0, len(eui64), 2):
+        prefix += ["".join(eui64[l:l+2])]
+    return IPy.IP(":".join(prefix))
+
+def make_ll64(mac):
+    """ Compute an IPv6 Link-local address from an EUI-48 (MAC) address
+
+    """
+    return make_eui64("fe80::", mac)
 
 
 class Subnet(object):
@@ -360,31 +382,12 @@ class Subnet(object):
         """
         return self.net.prefixlen()
 
-    @staticmethod
-    def _make_eui64(net, mac):
-        """ Compute an EUI-64 address from an EUI-48 (MAC) address
-
-        """
-        comp = mac.split(":")
-        prefix = IPy.IP(net).net().strFullsize().split(":")[:4]
-        eui64 = comp[:3] + ["ff", "fe"] + comp[3:]
-        eui64[0] = "%02x" % (int(eui64[0], 16) ^ 0x02)
-        for l in range(0, len(eui64), 2):
-            prefix += ["".join(eui64[l:l+2])]
-        return IPy.IP(":".join(prefix))
-
     def make_eui64(self, mac):
         """ Compute an EUI-64 address from an EUI-48 (MAC) address in this
         subnet.
 
         """
-        return self._make_eui64(self.net, mac)
-
-    def make_ll64(self, mac):
-        """ Compute an IPv6 Link-local address from an EUI-48 (MAC) address
-
-        """
-        return self._make_eui64("fe80::", mac)
+        return make_eui64(self.net, mac)
 
 
 class VMNetProxy(object): # pylint: disable=R0902
@@ -394,9 +397,11 @@ class VMNetProxy(object): # pylint: disable=R0902
                  dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
                  dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
                  dhcp_domain='',
-                 dhcp_server_ip=DHCP_DUMMY_SERVER_IP, dhcp_nameservers=None,
+                 dhcp_server_ip=None, dhcp_nameservers=None,
                  ra_period=DEFAULT_RA_PERIOD, ipv6_nameservers=None,
-                 dns_server_ip=DNS_DUMMY_SERVER_IP, dns_ttl=DEFAULT_DNS_TTL,
+                 dns_server_ip=None,
+                 dns_server_ip6=None,
+                 dns_ttl=DEFAULT_DNS_TTL,
                  dns_forward=DEFAULT_DNS_FORWARD,
                  addresses={}, addresses6={}):
 
@@ -406,6 +411,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.dhcp_domain = dhcp_domain
         self.dhcp_server_ip = dhcp_server_ip
         self.dns_server_ip = dns_server_ip
+        self.dns_server_ip6 = dns_server_ip6
         self.dns_ttl = dns_ttl
         self.dns_forward = dns_forward
         self.addresses = addresses
@@ -459,13 +465,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             self._setup_nfqueue(dns_queue_num, AF_INET, self.dns_response)
 
         if dns6_queue_num is not None:
-            self._setup_nfqueue(dns6_queue_num, AF_INET6, self.dns_response)
-
-        # TODO: test using ipv6 for dns (easier with dig)
-        # we'll need to use different layers
-        # we don't even capture packets at the moment
-        # we need to get ip6tables to forward icmp6 packets to us
-        # should really use UDP layer to get sport and dport
+            self._setup_nfqueue(dns6_queue_num, AF_INET6, self.dns6_response)
 
     def _cleanup(self):
         """ Free all resources for a graceful exit
@@ -660,6 +660,11 @@ class VMNetProxy(object): # pylint: disable=R0902
                          " payload found", iface)
             return
 
+        if not UDP in pkt:
+            logging.warn("Invalid request on %s, no UDP"
+                         " payload found", iface)
+            return
+
         # Get the client MAC address
         resp = pkt[BOOTP].copy()
         hlen = resp.hlen
@@ -686,9 +691,11 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         resp = Ether(dst=mac, src=ifmac)/\
-               IP(src=binding.dhcp_server_ip or self.dhcp_server_ip,
+               IP(src=binding.dhcp_server_ip or\
+                  self.dhcp_server_ip or\
+                  binding.nameservers[0],
                   dst=binding.ip)/\
-               UDP(sport=pkt.dport, dport=pkt.sport)/resp
+               UDP(sport=pkt[UDP].dport, dport=pkt[UDP].sport)/resp
         subnet = self.subnets[iface]
 
         if not DHCP in pkt:
@@ -718,7 +725,7 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         elif req_type in (DHCPDISCOVER, DHCPREQUEST):
             resp_type = DHCP_REQRESP[req_type]
-            resp.yiaddr = self.clients[mac].ip
+            resp.yiaddr = binding.ip
             dhcp_options += [
                  ("broadcast_address", str(subnet.broadcast)),
                  ("subnet_mask", str(subnet.netmask)),
@@ -749,7 +756,9 @@ class VMNetProxy(object): # pylint: disable=R0902
         # Finally, always add the server identifier and end options
         dhcp_options += [
             ("message-type", resp_type),
-            ("server_id", binding.dhcp_server_ip or self.dhcp_server_ip),
+            ("server_id", binding.dhcp_server_ip or\
+                          self.dhcp_server_ip or\
+                          binding.nameservers[0]),
             "end"
         ]
         resp /= DHCP(options=dhcp_options)
@@ -788,7 +797,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         subnet = self.v6nets[iface]
-        ifll = subnet.make_ll64(ifmac)
+        ifll = make_ll64(ifmac)
 
         resp = Ether(src=ifmac)/\
                IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
@@ -825,7 +834,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         subnet = self.v6nets[iface]
-        ifll = subnet.make_ll64(ifmac)
+        ifll = make_ll64(ifmac)
 
         ns = IPv6(payload.get_data())
 
@@ -850,7 +859,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.sendp(resp, iface)
         return
 
-    def dns_response(self, i, payload): # pylint: disable=W0613,R0914
+    def _dns_response(self, i, payload, ipv6): # pylint: disable=W0613,R0914
         """ Generate a reply to a DNS query
 
         """
@@ -868,7 +877,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         # Decode the response - NFQUEUE relays IP packets
-        pkt = IP(payload.get_data())
+        pkt = (IPv6 if ipv6 else IP)(payload.get_data())
 
         # Signal the kernel that it shouldn't further process the packet
         payload.set_verdict(nfqueue.NF_DROP)
@@ -883,6 +892,11 @@ class VMNetProxy(object): # pylint: disable=R0902
         if not ifmac:
             return
 
+        if not UDP in pkt:
+            logging.warn("Invalid request from %s on %s, no UDP"
+                         " payload found", binding.mac, iface)
+            return
+
         if not DNS in pkt:
             logging.warn("Invalid request from %s on %s, no DNS"
                          " payload found", binding.mac, iface)
@@ -893,10 +907,20 @@ class VMNetProxy(object): # pylint: disable=R0902
                          " payload found", binding.mac, iface)
             return
 
-        resp = Ether(dst=binding.mac, src=ifmac)/\
-               IP(src=binding.dns_server_ip or self.dns_server_ip,
-                  dst=binding.ip)/\
-               UDP(sport=pkt.dport, dport=pkt.sport)
+        resp = Ether(dst=binding.mac, src=ifmac)
+        
+        if ipv6:
+            resp /= IPv6(src=binding.dns_server_ip6 or\
+                             self.dns_server_ip6 or\
+                             binding.nameservers6[0],
+                         dst=str(make_ll64(binding.mac)))
+        else:
+            resp /= IP(src=binding.dns_server_ip or\
+                           self.dns_server_ip or\
+                           binding.nameservers[0],
+                       dst=binding.ip)
+
+        resp /= UDP(sport=pkt[UDP].dport, dport=pkt[UDP].sport)
 
         qname = pkt[DNSQR].qname
         qtype = pkt[DNSQR].qtype
@@ -929,9 +953,15 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, rcode='name-error')
 
         logging.info("DNS %s->%s to %s (%s) on %s",
-                     qname, addr, binding.mac, binding.ip, iface)
+                     qname, addr, binding.mac, resp[IPv6 if ipv6 else IP].dst, iface)
 
         self.sendp(resp, iface)
+
+    def dns_response(self, i, payload): # pylint: disable=W0613,R0914
+        return self._dns_response(i, payload, False)
+
+    def dns6_response(self, i, payload): # pylint: disable=W0613,R0914
+        return self._dns_response(i, payload, True) 
 
     def send_periodic_ra(self):
         # Use a separate thread as this may take a _long_ time with
@@ -954,7 +984,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                               " as it is not IPv6-connected", iface)
                 continue
 
-            ifll = subnet.make_ll64(ifmac)
+            ifll = make_ll64(ifmac)
             resp = Ether(src=ifmac)/\
                    IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
                    ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
@@ -1065,7 +1095,19 @@ if __name__ == "__main__":
                 raise validate.VdtValueError(entry)
         return value
 
+    def is_ip6_addr(value):
+        try:
+            ip = IPy.IP(value)
+        except ValueError:
+            raise validate.VdtValueError(value)
+
+        if ip.version() != 6:
+            raise validate.VdtValueError(value)
+
+        return value
+
     validator.functions["ip_addr_list"] = is_ip_list
+    validator.functions['ip6_addr'] = is_ip6_addr
     config_spec = StringIO(CONFIG_SPEC)
 
 
@@ -1154,6 +1196,7 @@ if __name__ == "__main__":
             "dns_queue_num": config["dns"].as_int("dns_queue"),
             "dns6_queue_num": config["dns"].as_int("dns6_queue"),
             "dns_server_ip": config["dns"]["server_ip"],
+            "dns_server_ip6": config["dns"]["server_ip6"],
             "dns_ttl": config["dns"]["ttl"],
             "dns_forward": config["dns"]["forward"],
             "addresses": config["addresses"],
