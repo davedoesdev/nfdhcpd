@@ -96,6 +96,7 @@ nameservers = ip_addr_list(family=6)
 [dns]
 enable_dns = boolean(default=False)
 dns_queue = integer(min=0, max=65535)
+dns6_queue = integer(min=0, max=65535)
 server_ip = ip_addr()
 ttl = integer(min=0, max=2147483647, default=10)
 forward = boolean(default=False)
@@ -202,7 +203,9 @@ def parse_binding_file(path):
     addresses6 = {}
 
     for line in iffile:
-        if line.startswith("IP="):
+        if line.startswith("#"):
+            continue
+        elif line.startswith("IP="):
             ip = line.strip().split("=")[1]
             ips = ip.split()
         elif line.startswith("MAC="):
@@ -314,13 +317,17 @@ class Client(object):
         return self.ips[0]
 
     def is_valid(self):
-        return self.mac is not None and self.ips is not None
+        return self.mac is not None
 
 
 class Subnet(object):
     def __init__(self, net=None, gw=None):
         if isinstance(net, str):
-            self.net = IPy.IP(net)
+            try:
+                self.net = IPy.IP(net)
+            except ValueError, e:
+                logging.warn("Error parsing subnet %s: %s", net, str(e))
+                self.net = None
         else:
             self.net = net
         self.gw = gw
@@ -382,7 +389,8 @@ class Subnet(object):
 
 class VMNetProxy(object): # pylint: disable=R0902
     def __init__(self, data_path, dhcp_queue_num=None, # pylint: disable=R0913
-                 rs_queue_num=None, ns_queue_num=None, dns_queue_num=None,
+                 rs_queue_num=None, ns_queue_num=None,
+                 dns_queue_num=None, dns6_queue_num=None,
                  dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
                  dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
                  dhcp_domain='',
@@ -449,6 +457,15 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         if dns_queue_num is not None:
             self._setup_nfqueue(dns_queue_num, AF_INET, self.dns_response)
+
+        if dns6_queue_num is not None:
+            self._setup_nfqueue(dns6_queue_num, AF_INET6, self.dns_response)
+
+        # TODO: test using ipv6 for dns (easier with dig)
+        # we'll need to use different layers
+        # we don't even capture packets at the moment
+        # we need to get ip6tables to forward icmp6 packets to us
+        # should really use UDP layer to get sport and dport
 
     def _cleanup(self):
         """ Free all resources for a graceful exit
@@ -742,7 +759,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.sendp(resp, iface)
 
     def rs_response(self, i, payload): # pylint: disable=W0613
-        """ Generate a reply to a BOOTP/DHCP request
+        """ Generate a reply to an ICMPv6 router solicitation
 
         """
         indev = payload.get_physindev() or payload.get_indev()
@@ -757,28 +774,28 @@ class VMNetProxy(object): # pylint: disable=R0902
             payload.set_verdict(nfqueue.NF_ACCEPT)
             return
 
+        # Signal the kernel that it shouldn't further process the packet
+        payload.set_verdict(nfqueue.NF_DROP)
+
+        try:
+            binding = self.clients[self.rev_clients[iface]]
+        except KeyError:
+            logging.warn("No client on %s", iface)
+            return
+
         ifmac = self.get_iface_hw_addr(iface)
         if not ifmac:
             return
 
-        try:
-            binding = self.clients[ifmac]
-        except KeyError:
-            logging.warn("Invalid client %s on %s", ifmac, iface)
-            return
-
         subnet = self.v6nets[iface]
         ifll = subnet.make_ll64(ifmac)
-
-        # Signal the kernel that it shouldn't further process the packet
-        payload.set_verdict(nfqueue.NF_DROP)
 
         resp = Ether(src=ifmac)/\
                IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
                ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
                                      prefixlen=subnet.prefixlen)
 
-        nameservers = binding.nameservers or self.ipv6_nameservers
+        nameservers = binding.nameservers6 or self.ipv6_nameservers
 
         if nameservers:
             resp /= ICMPv6NDOptRDNSS(dns=nameservers,
@@ -943,9 +960,9 @@ class VMNetProxy(object): # pylint: disable=R0902
                    ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
                                          prefixlen=subnet.prefixlen)
 
-            nameservers = client.nameservers or self.ipv6_nameservers
+            nameservers = client.nameservers6 or self.ipv6_nameservers
 
-            if self.ipv6_nameservers:
+            if nameservers:
                 resp /= ICMPv6NDOptRDNSS(dns=nameservers,
                                          lifetime=self.ra_period * 3)
             try:
@@ -1135,6 +1152,7 @@ if __name__ == "__main__":
     if config["dns"].as_bool("enable_dns"):
         proxy_opts.update({
             "dns_queue_num": config["dns"].as_int("dns_queue"),
+            "dns6_queue_num": config["dns"].as_int("dns6_queue"),
             "dns_server_ip": config["dns"]["server_ip"],
             "dns_ttl": config["dns"]["ttl"],
             "dns_forward": config["dns"]["forward"],
