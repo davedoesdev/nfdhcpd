@@ -934,7 +934,9 @@ class VMNetProxy(object): # pylint: disable=R0902
             addr = (binding.addresses if qtypename == "A" else binding.addresses6).get(qname)
             if addr is None:
                 addr = (self.addresses if qtypename == "A" else self.addresses6).get(qname)
-            if addr is None and self.dns_forward and binding.dns_forward:
+            if addr is None and\
+               self.dns_forward and\
+               (binding.dns_forward is not False):
                 logging.debug("Performing DNS lookup for %s type %s from %s on %s", qname, qtypename, binding.mac, iface)
                 try:
                     info = socket.getaddrinfo(qname, None,
