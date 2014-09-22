@@ -45,6 +45,7 @@ from scapy.packet import BasePacket
 from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
+                               ICMPv6ND_NS, \
                                ICMPv6NDOptDstLLAddr, \
                                ICMPv6NDOptPrefixInfo, \
                                ICMPv6NDOptRDNSS
@@ -799,7 +800,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         subnet = self.v6nets[iface]
         ifll = make_ll64(ifmac)
 
-        resp = Ether(src=ifmac)/\
+        resp = Ether(dst=binding.mac, src=ifmac)/\
                IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
                ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
                                      prefixlen=subnet.prefixlen)
@@ -838,24 +839,32 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         ns = IPv6(payload.get_data())
 
-        if not (subnet.net.overlaps(ns.tgt) or str(ns.tgt) == str(ifll)):
-            logging.debug("Received NS for a non-routable IP (%s)", ns.tgt)
+        if not ICMPv6ND_NS in ns:
+            logging.warn("Invalid request on %s, no ICMPv6ND_NS"
+                         " payload found", iface)
+            return
+
+        tgt = ns[ICMPv6ND_NS].tgt
+
+        if subnet.net.overlaps(tgt) and (str(tgt) != str(ifll)):
+            logging.debug("Received NS for a non-routable IP (%s)", tgt)
             payload.set_verdict(nfqueue.NF_ACCEPT)
             return
 
         payload.set_verdict(nfqueue.NF_DROP)
 
         try:
-            client_lladdr = ns.lladdr
-        except AttributeError:
+            binding = self.clients[self.rev_clients[iface]]
+        except KeyError:
+            logging.warn("No client on %s", iface)
             return
 
-        resp = Ether(src=ifmac, dst=client_lladdr)/\
+        resp = Ether(src=ifmac, dst=binding.mac)/\
                IPv6(src=str(ifll), dst=ns.src)/\
-               ICMPv6ND_NA(R=1, O=0, S=1, tgt=ns.tgt)/\
+               ICMPv6ND_NA(R=1, O=0, S=1, tgt=tgt)/\
                ICMPv6NDOptDstLLAddr(lladdr=ifmac)
 
-        logging.info("NA on %s for %s", iface, ns.tgt)
+        logging.info("NA on %s for %s", iface, tgt)
         self.sendp(resp, iface)
         return
 
