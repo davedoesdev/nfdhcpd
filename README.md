@@ -2,7 +2,7 @@ For details about the original project, see the [upstream documentation](https:/
 
 I've made the following enhancements:
 
-- Added a DNS server. Define entries in each interface's binding file. DNS queries can optionally be forward to the system resolver.
+- Added a DNS server. Define entries in each interface's binding file. DNS queries can optionally be forwarded to the system resolver.
 - Allow subnet configuration to be made in binding files.
 
 Here's a sample binding file (e.g. `/var/lib/nfdhcpd/tap0`):
@@ -23,11 +23,15 @@ ADDRESS6:www.google.com.=1234:5678:abcd:ef01:1234:5678:9abc:def0
 This configures `tap0` like so:
 
 - Expect packets to be sent from and delivered to MAC `52:54:00:12:34:56`.
+
 - In DHCP responses, set the IPv4 address to `10.0.1.40`, the host name to `foobar`, the IPv4 subnet to `10.0.1.0/24` and a DNS server address of `10.0.1.50`. The DNS server address should be any unused address on this network. You can use the same address in multiple binding files.
+
 - In IPv6 router advertisements (including responses to ICMPv6 router solicitations), set the prefix to `fde5:824d:d315:3bb1::/64` (a private address range) and the DNS server option to `fde5:824d:d315:3bb1::1`. You can use the same address in multiple binding files.
 
   The DNS server address should be any unused address on this network. The attached device (usually a VM) is assumed to be using Stateless Address Autoconfiguration (SLAAC), by combining the prefix with EUI-64.
+
 - Add IPv4 and IPv6 DNS entries for `www.google.com` (obviously this is just an example).
+
 - Add an IPv4 DNS entry for `database`. You could of course add an IPv6 entry if you wanted.
 
 You can use DNS entries so multi-VM applications don't have to know which IP address each VM is configured with.
@@ -69,7 +73,7 @@ www.yahoo.co.uk. = 10.0.1.1
 www.yahoo.co.uk. = abab:abab:abab:abab:abab:abab:abab:abab
 ```
 
-You can see we enabled forwarding of DNS queries to the system resolver. This is also configurable on a per-binding basis (`DNS_FORWARD=` in the binding file). Also, you can define some global DNS entries to be used by all bindings.
+You can see we enabled forwarding of DNS queries to the system resolver. This is also configurable on a per-binding basis (`DNS_FORWARD=` in the binding file). You can define some global DNS entries to be used by all bindings too.
 
 # Packet filtering rules
 
@@ -140,7 +144,7 @@ dpkg-buildpackage -us -uc
 
 Note, however, that a couple of the package's dependencies currently have issues which means things aren't quite as smooth as they should be.
 
-- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcp` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you could build version 0.5 from [source](https://launchpad.net/ubuntu/+source/nfqueue-bindings/0.5-1).
+- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcp` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you can build version 0.5 from [source](https://launchpad.net/ubuntu/+source/nfqueue-bindings/0.5-1).
 
 - `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) but please visit the bug page and say it affects you. If you remake the package from source, it does include all its files.
 
