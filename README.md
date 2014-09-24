@@ -119,7 +119,7 @@ You can resolve it to any unused MAC address on this network &mdash; `nfdhcpd` w
 
 You may also wish to ensure only packets sent by and destined for the allocated IP and MAC address can get through the interface.
 
-For example, if we have allocated IP address `10.0.1.20` and MAC address `52:54:00:12:34:57` to interface `tap0` then we could do this:
+For example, if we have allocated IP address `10.0.1.20`, MAC address `52:54:00:12:34:57` and IPv6 subnet (prefix) `fde5:824d:d315:3bb1::/64` to interface `tap0` then we could do this:
 
 ```shell
 iptables -A FORWARD -m physdev --physdev-in tap0 -s 10.0.1.20 -d 10.0.1.0/24 -j ACCEPT
@@ -127,12 +127,16 @@ iptables -A FORWARD -m physdev --physdev-out tap0 -s 10.0.1.0/24 -d 10.0.1.20 -j
 iptables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
 iptables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 
+# Assume guest uses EUI-64. Too restrictive for RFC-4941 (privacy extensions).
+ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
+ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
+
 ebtables -A FORWARD -i tap0 -s 52:54:00:12:34:57 -j ACCEPT
 ebtables -A FORWARD -i tap0 -d 52:54:00:12:34:57 -j ACCEPT
 ebtables -A FORWARD -i tap0 -j DROP
 ```
-
-
 
 # Debian packages
 
