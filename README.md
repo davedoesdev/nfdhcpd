@@ -128,8 +128,8 @@ iptables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
 iptables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 
 # Assume guest uses EUI-64. Too restrictive for RFC-4941 (privacy extensions).
-ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
-ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d fde5:824d:d315:3bb1::/24 -j ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
 ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 
