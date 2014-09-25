@@ -125,7 +125,12 @@ For example, if we have allocated IP address `10.0.1.20`, MAC address `52:54:00:
 iptables -A FORWARD -m physdev --physdev-in tap0 -s 10.0.1.20 -d 10.0.1.0/24 -j ACCEPT
 iptables -A FORWARD -m physdev --physdev-out tap0 -s 10.0.1.0/24 -d 10.0.1.20 -j ACCEPT
 iptables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
-iptables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
+iptables -A FORWARD -m physdev --physdev- ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
+ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
+
+out tap0 -j REJECT
 
 # Assume guest uses EUI-64. Too restrictive for RFC-4941 (privacy extensions).
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d fde5:824d:d315:3bb1::/24 -j ACCEPT
@@ -133,11 +138,27 @@ ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
 ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 
-ebtables -A FORWARD -i tap0 -s 52:54:00:12:34:57 -j ACCEPT
-ebtables -A FORWARD -i tap0 -d 52:54:00:12:34:57 -j ACCEPT
+# Stop any packets not from allocated MAC address
+ebtables -A FORWARD -i tap0 -s ! 52:54:00:12:34:57 -j DROP
+# Allow ARP requests for this IP address from subnet
+ebtables -A FORWARD -o tap0 -p arp --arp-opcode request --arp-ip-src 10.0.1.0/24 --arp-ip-dst 10.0.1.20 -j ACCEPT
+# Stop any packets not for allocated MAC address
+ebtables -A FORWARD -o tap0 -d ! 52:54:00:12:34:57 -j DROP
+# Allow ARP replies from this API address to subnet
+ebtables -A FORWARD -i tap0 -p arp --arp-opcode reply --arp-ip-src 10.0.1.20 --arp-ip-dst 10.0.1.0/24 -j ACCEPT
+# Allow ARP requests made from this device but only for subnet
+ebtables -A FORWARD -i tap0 -p arp --arp-opcode request --arp-ip-src 10.0.1.20 --arp-ip-dst 10.0.1.0/24 -j ACCEPT
+# Allow ARP replies to this IP address but only from subnet
+ebtables -A FORWARD -o tap0 -p arp --arp-opcode reply --arp-ip-src 10.0.1.0/24 --arp-ip-dst 10.0.1.20 -j ACCEPT
+# Allow all IPv4 and IPv6 packets in and out (iptables and ip6tables will pick them up)
+ebtables -A FORWARD -i tap0 -p ipv4 -j ACCEPT
+ebtables -A FORWARD -o tap0 -p ipv4 -j ACCEPT
+ebtables -A FORWARD -i tap0 -p ipv6 -j ACCEPT
+ebtables -A FORWARD -o tap0 -p ipv6 -j ACCEPT
 ebtables -A FORWARD -i tap0 -j DROP
+# Drop the rest
+ebtables -A FORWARD -o tap0 -j DROP
 ```
-
 # Debian packages
 
 The `debian` branch can make a `.deb` file for installing on Debian-based distributions like Ubuntu. Run the following command to make the package:
