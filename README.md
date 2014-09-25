@@ -125,15 +125,13 @@ For example, if we have allocated IP address `10.0.1.20`, MAC address `52:54:00:
 iptables -A FORWARD -m physdev --physdev-in tap0 -s 10.0.1.20 -d 10.0.1.0/24 -j ACCEPT
 iptables -A FORWARD -m physdev --physdev-out tap0 -s 10.0.1.0/24 -d 10.0.1.20 -j ACCEPT
 iptables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
-iptables -A FORWARD -m physdev --physdev- ACCEPT
-ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
-ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
-ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
-
-out tap0 -j REJECT
+iptables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 
 # Assume guest uses EUI-64. Too restrictive for RFC-4941 (privacy extensions).
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d fde5:824d:d315:3bb1::/24 -j ACCEPT
+# Allow packets to solicited-node multicast addresses (for neighbour solicitation)
+# nfdhcp checks the request is for the allocated prefix
+ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d ff02:0:0:0:0:1:ff00::/104 -j ACCEPT
 ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
 ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
