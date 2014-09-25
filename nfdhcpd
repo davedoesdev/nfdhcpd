@@ -3,7 +3,6 @@
 
 # nfdcpd: A promiscuous, NFQUEUE-based DHCP server for virtual machine hosting
 # Copyright (c) 2010 GRNET SA
-# Copyright (c) 2014 David Halls
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -176,7 +175,7 @@ def parse_routing_table(table="main", family=4):
 
 
 def parse_binding_file(path):
-    """ Read a client configuration from a tap file
+    """ Read a client configuration binding file
 
     """
     try:
@@ -185,80 +184,123 @@ def parse_binding_file(path):
         logging.warn("Unable to open binding file %s: %s", path, str(e))
         return None
 
-    mac = None
-    ips = None
-    link = None
-    hostname = None
-    subnet = None
-    gateway = None
-    subnet6 = None
-    gateway6 = None
-    dhcp_server_ip = None
-    dns_server_ip = None
-    dns_server_ip6 = None
-    nameservers = None
-    nameservers6 = None
-    domain = None
-    dns_ttl = None
-    dns_forward = None
-    addresses = {}
-    addresses6 = {}
+    try:
+        mac = None
+        ips = None
+        link = None
+        hostname = None
+        subnet = None
+        gateway = None
+        subnet6 = None
+        gateway6 = None
+        dhcp_server_ip = None
+        dns_server_ip = None
+        dns_server_ip6 = None
+        nameservers = None
+        nameservers6 = None
+        domain = None
+        dns_ttl = None
+        dns_forward = None
+        addresses = {}
+        addresses6 = {}
+        address_lists = []
 
-    for line in iffile:
-        if line.startswith("#"):
-            continue
-        elif line.startswith("IP="):
-            ip = line.strip().split("=")[1]
-            ips = ip.split()
-        elif line.startswith("MAC="):
-            mac = line.strip().split("=")[1]
-        elif line.startswith("LINK="):
-            link = line.strip().split("=")[1]
-        elif line.startswith("HOSTNAME="):
-            hostname = line.strip().split("=")[1]
-        elif line.startswith("SUBNET="):
-            subnet = line.strip().split("=")[1]
-        elif line.startswith("GATEWAY="):
-            gateway = line.strip().split("=")[1]
-        elif line.startswith("SUBNET6="):
-            subnet6 = line.strip().split("=")[1]
-        elif line.startswith("GATEWAY6="):
-            gateway6 = line.strip().split("=")[1]
-        elif line.startswith("DHCP_SERVER_IP="):
-            dhcp_server_ip = line.strip().split("=")[1]
-        elif line.startswith("DNS_SERVER_IP="):
-            dns_server_ip = line.strip().split("=")[1]
-        elif line.startswith("DNS_SERVER_IP6="):
-            dns_server_ip6 = line.strip().split("=")[1]
-        elif line.startswith("NAMESERVERS="):
-            nameservers = line.strip().split("=")[1]
-            nameservers = [ns.strip() for ns in nameservers.split(",")]
-        elif line.startswith("NAMESERVERS6="):
-            nameservers6 = line.strip().split("=")[1]
-            nameservers6 = [ns.strip() for ns in nameservers6.split(",")]
-        elif line.startswith("DOMAIN="):
-            domain = line.strip().split("=")[1]
-        elif line.startswith("DNS_TTL="):
-            dns_ttl = int(line.strip().split("=")[1])
-        elif line.startswith("DNS_FORWARD="):
-            dns_forward = line.strip().split("=")[1].lower()
-            dns_forward = (dns_forward == "true") or (dns_forward == "yes")
-        elif line.startswith("ADDRESS:"):
-            entry = line[8:].strip().split("=")
-            addresses[entry[0]] = entry[1]
-        elif line.startswith("ADDRESS6:"):
-            entry = line[9:].strip().split("=")
-            addresses6[entry[0]] = entry[1]
+        for line in iffile:
+            if line.startswith("#"):
+                continue
+            elif line.startswith("IP="):
+                ip = line.strip().split("=")[1]
+                ips = ip.split()
+            elif line.startswith("MAC="):
+                mac = line.strip().split("=")[1]
+            elif line.startswith("LINK="):
+                link = line.strip().split("=")[1]
+            elif line.startswith("HOSTNAME="):
+                hostname = line.strip().split("=")[1]
+            elif line.startswith("SUBNET="):
+                subnet = line.strip().split("=")[1]
+            elif line.startswith("GATEWAY="):
+                gateway = line.strip().split("=")[1]
+            elif line.startswith("SUBNET6="):
+                subnet6 = line.strip().split("=")[1]
+            elif line.startswith("GATEWAY6="):
+                gateway6 = line.strip().split("=")[1]
+            elif line.startswith("DHCP_SERVER_IP="):
+                dhcp_server_ip = line.strip().split("=")[1]
+            elif line.startswith("DNS_SERVER_IP="):
+                dns_server_ip = line.strip().split("=")[1]
+            elif line.startswith("DNS_SERVER_IP6="):
+                dns_server_ip6 = line.strip().split("=")[1]
+            elif line.startswith("NAMESERVERS="):
+                nameservers = line.strip().split("=")[1]
+                nameservers = [ns.strip() for ns in nameservers.split(",")]
+            elif line.startswith("NAMESERVERS6="):
+                nameservers6 = line.strip().split("=")[1]
+                nameservers6 = [ns.strip() for ns in nameservers6.split(",")]
+            elif line.startswith("DOMAIN="):
+                domain = line.strip().split("=")[1]
+            elif line.startswith("DNS_TTL="):
+                dns_ttl = int(line.strip().split("=")[1])
+            elif line.startswith("DNS_FORWARD="):
+                dns_forward = line.strip().split("=")[1].lower()
+                dns_forward = (dns_forward == "true") or (dns_forward == "yes")
+            elif line.startswith("ADDRESS:"):
+                entry = line[8:].strip().split("=")
+                addresses[entry[0]] = entry[1]
+            elif line.startswith("ADDRESS6:"):
+                entry = line[9:].strip().split("=")
+                addresses6[entry[0]] = entry[1]
+            elif line.startswith("ADDRESS_LISTS:"):
+                address_lists = line.strip().split("=")[1]
+                address_lists = [al.strip() for al in address_lists.split(",")]
+            else:
+                logging.warn("Unknown line in binding file %s: %s" %
+                             (path, line))
 
-    return Client(mac=mac, ips=ips, link=link, hostname=hostname,
-                  subnet=subnet, gateway=gateway,
-                  subnet6=subnet6, gateway6=gateway6,
-                  dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
-                  nameservers6=nameservers6, domain=domain,
-                  dns_server_ip=dns_server_ip, dns_server_ip6=dns_server_ip6,
-                  addresses=addresses, addresses6=addresses6,
-                  dns_ttl=dns_ttl, dns_forward=dns_forward)
+        return Client(mac=mac, ips=ips, link=link, hostname=hostname,
+                      subnet=subnet, gateway=gateway,
+                      subnet6=subnet6, gateway6=gateway6,
+                      dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
+                      nameservers6=nameservers6, domain=domain,
+                      dns_server_ip=dns_server_ip,
+                      dns_server_ip6=dns_server_ip6,
+                      addresses=addresses, addresses6=addresses6,
+                      dns_ttl=dns_ttl, dns_forward=dns_forward,
+                      address_lists=address_lists)
+    finally:
+        iffile.close()
 
+def parse_address_list_file(path):
+    """ Read an address list file
+
+    """
+    try:
+        alfile = open(path, 'r')
+    except EnvironmentError, e:
+        logging.warn("Unable to open address list file %s: %s", path, str(e))
+        return None
+
+    try:
+        addresses = {}
+        addresses6 = {}
+
+        for line in alfile:
+            if line.startswith("#"):
+                continue
+            elif line.startswith("ADDRESS:"):
+                entry = line[8:].strip().split("=")
+                addresses[entry[0]] = entry[1]
+            elif line.startswith("ADDRESS6:"):
+                entry = line[9:].strip().split("=")
+                addresses6[entry[0]] = entry[1]
+            else:
+                logging.warn("Unknown line in address list file %s: %s" %
+                             (path, line))
+
+        return AddressList(addresses=addresses, addresses6=addresses6)
+
+    finally:
+        alfile.close()
 
 class ClientFileHandler(pyinotify.ProcessEvent):
     def __init__(self, server):
@@ -296,7 +338,8 @@ class Client(object):
                  subnet=None, gateway=None, subnet6=None, gateway6=None,
                  dhcp_server_ip=None, nameservers=None, nameservers6=None,
                  domain=None, dns_server_ip=None, dns_server_ip6=None,
-                 dns_ttl=None, dns_forward=None, addresses={}, addresses6={}):
+                 dns_ttl=None, dns_forward=None, addresses={}, addresses6={},
+                 address_lists=[]):
         self.mac = mac
         self.ips = ips
         self.hostname = hostname
@@ -315,6 +358,7 @@ class Client(object):
         self.domain = domain
         self.addresses = addresses
         self.addresses6 = addresses6
+        self.address_lists = address_lists
         self.iface = None
 
     @property
@@ -324,6 +368,10 @@ class Client(object):
     def is_valid(self):
         return self.mac is not None
 
+class AddressList(object):
+    def __init__(self, addresses={}, addresses6={}):
+        self.addresses = addresses
+        self.addresses6 = addresses6
 
 def make_eui64(net, mac):
     """ Compute an EUI-64 address from an EUI-48 (MAC) address
@@ -437,6 +485,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.ifaces = {}
         self.rev_ifaces = {}
         self.v6nets = {}
+        self.address_lists = {}
         self.nfq = {}
         self.l2socket = socket.socket(socket.AF_PACKET,
                                       socket.SOCK_RAW, ETH_P_ALL)
@@ -587,6 +636,12 @@ class VMNetProxy(object): # pylint: disable=R0902
         """
         iface = os.path.basename(path)
 
+        if iface.startswith("address_list"):
+            al = parse_address_list_file(path)
+            if al is not None:
+                self.address_lists[iface] = al
+            return
+
         logging.debug("Updating configuration for %s", iface)
         binding = parse_binding_file(path)
         if binding is None:
@@ -616,6 +671,10 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Cleanup clients on a removed interface
 
         """
+        if iface in self.address_lists:
+            del self.address_lists[iface]
+            return
+
         if iface in self.subnets:
             del self.subnets[iface]
 
@@ -941,9 +1000,20 @@ class VMNetProxy(object): # pylint: disable=R0902
             logging.warn("Unsupported request for %s type %s from %s on %s",
                          qname, qtypename, binding.mac, iface)
         else:
-            addr = (binding.addresses if qtypename == "A" else binding.addresses6).get(qname)
+            q6 = qtypename == "AAAA"
+            # first look in binding
+            addr = (binding.addresses6 if q6 else binding.addresses).get(qname)
             if addr is None:
-                addr = (self.addresses if qtypename == "A" else self.addresses6).get(qname)
+                # look in all address lists specified by the binding
+                for alname in binding.address_lists:
+                    al = self.address_lists.get("address_list_" + alname)
+                    if al is not None:
+                        addr = (al.addresses6 if q6 else al.addresses).get(qname)
+                        if addr is not None:
+                            break
+            if addr is None:
+                # look in global config
+                addr = (self.addresses6 if q6 else self.addresses).get(qname)
             if addr is None and\
                self.dns_forward and\
                (binding.dns_forward is not False):
