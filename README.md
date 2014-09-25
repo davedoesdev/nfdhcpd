@@ -144,7 +144,7 @@ ebtables -A FORWARD -i tap0 -s ! 52:54:00:12:34:57 -j DROP
 ebtables -A FORWARD -o tap0 -p arp --arp-opcode request --arp-ip-src 10.0.1.0/24 --arp-ip-dst 10.0.1.20 -j ACCEPT
 # Stop any packets not for allocated MAC address
 ebtables -A FORWARD -o tap0 -d ! 52:54:00:12:34:57 -j DROP
-# Allow ARP replies from this API address to subnet
+# Allow ARP replies from this IP address to subnet
 ebtables -A FORWARD -i tap0 -p arp --arp-opcode reply --arp-ip-src 10.0.1.20 --arp-ip-dst 10.0.1.0/24 -j ACCEPT
 # Allow ARP requests made from this device but only for subnet
 ebtables -A FORWARD -i tap0 -p arp --arp-opcode request --arp-ip-src 10.0.1.20 --arp-ip-dst 10.0.1.0/24 -j ACCEPT
