@@ -250,7 +250,7 @@ def parse_binding_file(path):
             elif line.startswith("ADDRESS6:"):
                 entry = line[9:].strip().split("=")
                 addresses6[entry[0]] = entry[1]
-            elif line.startswith("ADDRESS_LISTS:"):
+            elif line.startswith("ADDRESS_LISTS="):
                 address_lists = line.strip().split("=")[1]
                 address_lists = [al.strip() for al in address_lists.split(",")]
             else:
@@ -637,6 +637,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         iface = os.path.basename(path)
 
         if iface.startswith("address_list"):
+            logging.debug("Updating address list %s", iface)
             al = parse_address_list_file(path)
             if al is not None:
                 self.address_lists[iface] = al
