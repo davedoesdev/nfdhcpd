@@ -36,7 +36,7 @@ This configures `tap0` like so:
 
 You can use DNS entries so multi-VM applications don't have to know which IP address each VM is configured with.
 
-Here's an example global configuration file (`/etc/nfdhcp/nfdhcp.conf`):
+Here's an example global configuration file (`/etc/nfdhcpd/nfdhcpd.conf`):
 
 ```ini
 [general]
@@ -130,7 +130,7 @@ iptables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 # Assume guest uses EUI-64. Too restrictive for RFC-4941 (privacy extensions).
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d fde5:824d:d315:3bb1::/24 -j ACCEPT
 # Allow packets to solicited-node multicast addresses (for neighbour solicitation)
-# nfdhcp checks the request is for the allocated prefix
+# nfdhcpd checks the request is for the allocated prefix
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d ff02:0:0:0:0:1:ff00::/104 -j ACCEPT
 ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
@@ -167,7 +167,7 @@ dpkg-buildpackage -us -uc
 
 Note, however, that a couple of the package's dependencies currently have issues which means things aren't quite as smooth as they should be.
 
-- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcp` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you can build version 0.5 from [source](https://launchpad.net/ubuntu/+source/nfqueue-bindings/0.5-1).
+- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcpd` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you can build version 0.5 from [source](https://launchpad.net/ubuntu/+source/nfqueue-bindings/0.5-1).
 
 - `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) but please visit the bug page and say it affects you. If you remake the package from source, it does include all its files.
 
