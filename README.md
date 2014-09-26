@@ -5,6 +5,10 @@ I've made the following enhancements:
 - Added a DNS server. Define entries in each interface's binding file. DNS queries can optionally be forwarded to the system resolver.
 - Allow subnet configuration to be made in binding files.
 
+# Binding files
+
+There's one binding file per network interface.
+
 Here's a sample binding file (e.g. `/var/lib/nfdhcpd/tap0`):
 
 ```ini
@@ -18,6 +22,7 @@ NAMESERVERS6=fde5:824d:d315:3bb1::1
 ADDRESS:www.google.com.=10.0.1.3
 ADDRESS:database.=10.0.1.1
 ADDRESS6:www.google.com.=1234:5678:abcd:ef01:1234:5678:9abc:def0
+ADDRESS_LISTS=foo
 ```
 
 This configures `tap0` like so:
@@ -34,7 +39,13 @@ This configures `tap0` like so:
 
 - Add an IPv4 DNS entry for `database`. You could of course add an IPv6 entry if you wanted.
 
-You can use DNS entries so multi-VM applications don't have to know which IP address each VM is configured with.
+- Use a separate address list `foo` for other addresses. Address lists are files containing only `ADDRESS:` and `ADDRESS6:` entries. They live alongside binding files and must be named `address_list_<name>`. So in this case `/var/lib/nfdhcpd/address_list_foo`. 
+
+DNS entries and address lists are useful so multi-VM applications don't have to know which IP address each VM is configured with.
+
+`nfdhcpd` re-reads binding files and address list files when they change so you can update DNS entries while your application is running.
+
+# Global configuration
 
 Here's an example global configuration file (`/etc/nfdhcpd/nfdhcpd.conf`):
 
