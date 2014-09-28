@@ -216,6 +216,9 @@ def parse_binding_file(path):
         txts = {}
         address_lists = {}
         no_forward = None
+        notify_port = None
+        notify_ip = None
+        notify_ip6 = None
 
         for line in iffile:
             if line.startswith("#"):
@@ -269,6 +272,12 @@ def parse_binding_file(path):
                     address_lists[al.strip()] = True
             elif line.startswith("NO_FORWARD="):
                 no_forward = line.split("=")[1].strip()
+            elif line.startswith("NOTIFY_PORT="):
+                notify_port = int(line.split("=")[1].strip())
+            elif line.startswith("NOTIFY_IP="):
+                notify_ip = line.split("=")[1].strip()
+            elif line.startswith("NOTIFY_IP6="):
+                notify_ip6 = line.split("=")[1].strip()
             else:
                 logging.warn("Unknown line in binding file %s: %s", path, line)
 
@@ -282,7 +291,9 @@ def parse_binding_file(path):
                       addresses=addresses, addresses6=addresses6, txts=txts,
                       dns_ttl=dns_ttl, dns_forward=dns_forward,
                       address_lists=address_lists,
-                      no_forward=no_forward)
+                      no_forward=no_forward,
+                      notify_port=notify_port, notify_ip=notify_ip,
+                      notify_ip6=notify_ip6)
     finally:
         iffile.close()
 
@@ -364,7 +375,8 @@ class Client(object):
                  domain=None, dns_server_ip=None, dns_server_ip6=None,
                  dns_ttl=None, dns_forward=None,
                  addresses=None, addresses6=None, txts=None,
-                 address_lists=None, no_forward=None):
+                 address_lists=None, no_forward=None,
+                 notify_port=None, notify_ip=None, notify_ip6=None):
         self.mac = mac
         self.ip = ip
         self.hostname = hostname
@@ -386,6 +398,9 @@ class Client(object):
         self.txts = {} if txts is None else txts
         self.address_lists = {} if address_lists is None else address_lists
         self.no_forward = no_forward
+        self.notify_port = notify_port
+        self.notify_ip = notify_ip
+        self.notify_ip6 = notify_ip6
         self.iface = None
         self.seq_in = ""
         self.seq_out = ""
@@ -678,6 +693,9 @@ class VMNetProxy(object): # pylint: disable=R0902
         return addr
 
     def notify_bindings(self, bindings, update=True):
+        if not self.notify_enabled:
+            return
+
         for b in bindings:
             if not b.notify_port:
                 continue
