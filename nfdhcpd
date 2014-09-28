@@ -41,7 +41,7 @@ from select import select
 from socket import AF_INET, AF_INET6
 
 from scapy.data import ETH_P_ALL
-from scapy.packet import BasePacket
+from scapy.packet import BasePacket, Raw
 from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
@@ -61,6 +61,7 @@ DEFAULT_LEASE_RENEWAL = 600  # 10 min
 DEFAULT_RA_PERIOD = 300 # seconds
 DEFAULT_DNS_TTL = 10 # seconds
 DEFAULT_DNS_FORWARD = False
+DEFAULT_NOTIFY_PERIOD = 60 # seconds
 
 LOG_FILENAME = "nfdhcpd.log"
 
@@ -100,10 +101,19 @@ server_ip = ip_addr(default=None)
 server_ip6 = ip6_addr(default=None)
 ttl = integer(min=0, max=2147483647, default=10)
 forward = boolean(default=False)
+no_forward = string(default=None)
+
+[notify]
+enable_notify = boolean(default=False)
+notify_period = integer(min=1, max=4294967295)
+notify_queue = integer(min=0, max=65535)
+notify6_queue = integer(min=0, max=65535)
 
 [addresses]
 
 [addresses6]
+
+[txts]
 """
 
 
@@ -186,7 +196,7 @@ def parse_binding_file(path):
 
     try:
         mac = None
-        ips = None
+        ip = None
         link = None
         hostname = None
         subnet = None
@@ -196,77 +206,83 @@ def parse_binding_file(path):
         dhcp_server_ip = None
         dns_server_ip = None
         dns_server_ip6 = None
-        nameservers = None
-        nameservers6 = None
+        nameservers = []
+        nameservers6 = []
         domain = None
         dns_ttl = None
         dns_forward = None
         addresses = {}
         addresses6 = {}
-        address_lists = []
+        txts = {}
+        address_lists = {}
+        no_forward = None
 
         for line in iffile:
             if line.startswith("#"):
                 continue
             elif line.startswith("IP="):
-                ip = line.strip().split("=")[1]
-                ips = ip.split()
+                ip = line.split("=")[1].strip()
             elif line.startswith("MAC="):
-                mac = line.strip().split("=")[1]
+                mac = line.split("=")[1].strip()
             elif line.startswith("LINK="):
-                link = line.strip().split("=")[1]
+                link = line.split("=")[1].strip()
             elif line.startswith("HOSTNAME="):
-                hostname = line.strip().split("=")[1]
+                hostname = line.split("=")[1].strip()
             elif line.startswith("SUBNET="):
-                subnet = line.strip().split("=")[1]
+                subnet = line.split("=")[1].strip()
             elif line.startswith("GATEWAY="):
-                gateway = line.strip().split("=")[1]
+                gateway = line.split("=")[1].strip()
             elif line.startswith("SUBNET6="):
-                subnet6 = line.strip().split("=")[1]
+                subnet6 = line.split("=")[1].strip()
             elif line.startswith("GATEWAY6="):
-                gateway6 = line.strip().split("=")[1]
+                gateway6 = line.split("=")[1].strip()
             elif line.startswith("DHCP_SERVER_IP="):
-                dhcp_server_ip = line.strip().split("=")[1]
+                dhcp_server_ip = line.split("=")[1].strip()
             elif line.startswith("DNS_SERVER_IP="):
-                dns_server_ip = line.strip().split("=")[1]
+                dns_server_ip = line.split("=")[1].strip()
             elif line.startswith("DNS_SERVER_IP6="):
-                dns_server_ip6 = line.strip().split("=")[1]
+                dns_server_ip6 = line.split("=")[1].strip()
             elif line.startswith("NAMESERVERS="):
-                nameservers = line.strip().split("=")[1]
-                nameservers = [ns.strip() for ns in nameservers.split(",")]
+                nameservers += [ns.strip() for ns in
+                                line.split("=")[1].split(",")]
             elif line.startswith("NAMESERVERS6="):
-                nameservers6 = line.strip().split("=")[1]
-                nameservers6 = [ns.strip() for ns in nameservers6.split(",")]
+                nameservers6 += [ns.strip() for ns in
+                                 line.split("=")[1].split(",")]
             elif line.startswith("DOMAIN="):
-                domain = line.strip().split("=")[1]
+                domain = line.split("=")[1].strip()
             elif line.startswith("DNS_TTL="):
-                dns_ttl = int(line.strip().split("=")[1])
+                dns_ttl = int(line.split("=")[1].strip())
             elif line.startswith("DNS_FORWARD="):
-                dns_forward = line.strip().split("=")[1].lower()
+                dns_forward = line.split("=")[1].strip().lower()
                 dns_forward = (dns_forward == "true") or (dns_forward == "yes")
             elif line.startswith("ADDRESS:"):
-                entry = line[8:].strip().split("=")
-                addresses[entry[0]] = entry[1]
+                entry = line[8:].split("=")
+                addresses[entry[0].strip()] = entry[1].strip()
             elif line.startswith("ADDRESS6:"):
-                entry = line[9:].strip().split("=")
-                addresses6[entry[0]] = entry[1]
+                entry = line[9:].split("=")
+                addresses6[entry[0].strip()] = entry[1].strip()
+            elif line.startswith('TXT:'):
+                entry = line[4:].split("=")
+                txts[entry[0].strip()] = entry[1].strip()
             elif line.startswith("ADDRESS_LISTS="):
-                address_lists = line.strip().split("=")[1]
-                address_lists = [al.strip() for al in address_lists.split(",")]
+                for al in line.split("=")[1].split(","):
+                    address_lists[al.strip()] = True
+            elif line.startswith("NO_FORWARD="):
+                no_forward = line.split("=")[1].strip()
             else:
-                logging.warn("Unknown line in binding file %s: %s" %
-                             (path, line))
+                logging.warn("Unknown line in binding file %s: %s", path, line)
 
-        return Client(mac=mac, ips=ips, link=link, hostname=hostname,
+        return Client(mac=mac, ip=ip, link=link, hostname=hostname,
                       subnet=subnet, gateway=gateway,
                       subnet6=subnet6, gateway6=gateway6,
                       dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
                       nameservers6=nameservers6, domain=domain,
                       dns_server_ip=dns_server_ip,
                       dns_server_ip6=dns_server_ip6,
-                      addresses=addresses, addresses6=addresses6,
+                      addresses=addresses, addresses6=addresses6, txts=txts,
                       dns_ttl=dns_ttl, dns_forward=dns_forward,
-                      address_lists=address_lists)
+                      address_lists=address_lists,
+                      no_forward=no_forward)
     finally:
         iffile.close()
 
@@ -283,21 +299,29 @@ def parse_address_list_file(path):
     try:
         addresses = {}
         addresses6 = {}
+        txts = {}
+        no_forward = None
 
         for line in alfile:
             if line.startswith("#"):
                 continue
             elif line.startswith("ADDRESS:"):
-                entry = line[8:].strip().split("=")
-                addresses[entry[0]] = entry[1]
+                entry = line[8:].split("=")
+                addresses[entry[0].strip()] = entry[1].strip()
             elif line.startswith("ADDRESS6:"):
-                entry = line[9:].strip().split("=")
-                addresses6[entry[0]] = entry[1]
+                entry = line[9:].split("=")
+                addresses6[entry[0].strip()] = entry[1].strip()
+            elif line.startswith('TXT:'):
+                entry = line[4:].split("=")
+                txts[entry[0].strip()] = entry[1].strip()
+            elif line.startswith("NO_FORWARD="):
+                no_forward = line.split("=")[1].strip()
             else:
-                logging.warn("Unknown line in address list file %s: %s" %
-                             (path, line))
+                logging.warn("Unknown line in address list file %s: %s",
+                             path, line)
 
-        return AddressList(addresses=addresses, addresses6=addresses6)
+        return AddressList(addresses=addresses, addresses6=addresses6,
+                           txts=txts, no_forward=no_forward)
 
     finally:
         alfile.close()
@@ -334,14 +358,15 @@ class ClientFileHandler(pyinotify.ProcessEvent):
 
 
 class Client(object):
-    def __init__(self, mac=None, ips=None, link=None, hostname=None,
+    def __init__(self, mac=None, ip=None, link=None, hostname=None,
                  subnet=None, gateway=None, subnet6=None, gateway6=None,
                  dhcp_server_ip=None, nameservers=None, nameservers6=None,
                  domain=None, dns_server_ip=None, dns_server_ip6=None,
-                 dns_ttl=None, dns_forward=None, addresses={}, addresses6={},
-                 address_lists=[]):
+                 dns_ttl=None, dns_forward=None,
+                 addresses=None, addresses6=None, txts=None,
+                 address_lists=None, no_forward=None):
         self.mac = mac
-        self.ips = ips
+        self.ip = ip
         self.hostname = hostname
         self.link = link
         self.subnet = subnet
@@ -356,22 +381,25 @@ class Client(object):
         self.nameservers = nameservers
         self.nameservers6 = nameservers6
         self.domain = domain
-        self.addresses = addresses
-        self.addresses6 = addresses6
-        self.address_lists = address_lists
+        self.addresses = {} if addresses is None else addresses
+        self.addresses6 = {} if addresses6 is None else addresses6
+        self.txts = {} if txts is None else txts
+        self.address_lists = {} if address_lists is None else address_lists
+        self.no_forward = no_forward
         self.iface = None
-
-    @property
-    def ip(self):
-        return self.ips[0]
+        self.seq_in = ""
+        self.seq_out = ""
 
     def is_valid(self):
         return self.mac is not None
 
 class AddressList(object):
-    def __init__(self, addresses={}, addresses6={}):
-        self.addresses = addresses
-        self.addresses6 = addresses6
+    def __init__(self, addresses=None, addresses6=None, txts=None,
+                 no_forward=None):
+        self.addresses = {} if addresses is None else addresses
+        self.addresses6 = {} if addresses6 is None else addresses6
+        self.txts = {} if txts is None else txts
+        self.no_forward = no_forward
 
 def make_eui64(net, mac):
     """ Compute an EUI-64 address from an EUI-48 (MAC) address
@@ -453,7 +481,10 @@ class VMNetProxy(object): # pylint: disable=R0902
                  dns_server_ip6=None,
                  dns_ttl=DEFAULT_DNS_TTL,
                  dns_forward=DEFAULT_DNS_FORWARD,
-                 addresses={}, addresses6={}):
+                 addresses=None, addresses6=None, txts=None, no_forward=None,
+                 notify_queue_num=None,
+                 notify6_queue_num=None,
+                 notify_period=DEFAULT_NOTIFY_PERIOD):
 
         self.data_path = data_path
         self.lease_lifetime = dhcp_lease_lifetime
@@ -464,11 +495,17 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.dns_server_ip6 = dns_server_ip6
         self.dns_ttl = dns_ttl
         self.dns_forward = dns_forward
-        self.addresses = addresses
-        self.addresses6 = addresses6
+        self.addresses = {} if addresses is None else addresses
+        self.addresses6 = {} if addresses6 is None else addresses6
+        self.txts = {} if txts is None else txts
+        self.no_forward = no_forward
+        self.notify_queue_num = notify_queue_num
+        self.notify6_queue_num = notify6_queue_num
         self.ra_period = ra_period
+        self.notify_period = notify_period
+
         if dhcp_nameservers is None:
-            self.dhcp_nameserver = []
+            self.dhcp_nameservers = []
         else:
             self.dhcp_nameservers = dhcp_nameservers
 
@@ -478,6 +515,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             self.ipv6_nameservers = ipv6_nameservers
 
         self.ipv6_enabled = False
+        self.notify_enabled = False
 
         self.clients = {}
         self.rev_clients = {}
@@ -517,6 +555,15 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         if dns6_queue_num is not None:
             self._setup_nfqueue(dns6_queue_num, AF_INET6, self.dns6_response)
+
+        if notify_queue_num is not None:
+            self._setup_nfqueue(notify_queue_num, AF_INET, self.notify_handle)
+            self.notify_enabled = True
+
+        if notify6_queue_num is not None:
+            self._setup_nfqueue(notify6_queue_num, AF_INET6,
+                                self.notify6_handle)
+            self.notify_enabled = True
 
     def _cleanup(self):
         """ Free all resources for a graceful exit
@@ -630,6 +677,45 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         return addr
 
+    def notify_bindings(self, bindings, update=True):
+        for b in bindings:
+            if not b.notify_port:
+                continue
+
+            ifmac = self.get_iface_hw_addr(b.iface)
+            if not ifmac:
+                continue
+
+            updated = False
+
+            if b.notify_ip:
+                if update and not updated:
+                    b.seq_out = os.urandom(16)
+                    updated = True
+
+                pkt = Ether(src=ifmac, dst=b.mac)/\
+                      IP(src=b.notify_ip, dst=b.ip)/\
+                      UDP(sport=b.notify_port, dport=b.notify_port)/\
+                      b.seq_out
+
+                logging.info("notify to %s (%s) on %s",
+                             b.mac, b.notify_ip, b.iface)
+                self.sendp(pkt, b.iface)
+
+            if b.notify_ip6:
+                if update and not updated:
+                    b.seq_out = os.urandom(16)
+                    updated = True
+
+                pkt = Ether(src=ifmac, dst=b.mac)/\
+                      IPv6(src=b.notify_ip6, dst=str(make_ll64(b.mac)))/\
+                      UDP(sport=b.notify_port, dport=b.notify_port)/\
+                      b.seq_out
+
+                logging.info("notify to %s (%s) on %s",
+                             b.mac, b.notify_ip6, b.iface)
+                self.sendp(pkt, b.iface)
+
     def add_iface(self, path):
         """ Add an interface to monitor
 
@@ -641,6 +727,8 @@ class VMNetProxy(object): # pylint: disable=R0902
             al = parse_address_list_file(path)
             if al is not None:
                 self.address_lists[iface] = al
+            self.notify_bindings([b for b in self.clients.itervalues()
+                                 if iface in b.address_lists])
             return
 
         logging.debug("Updating configuration for %s", iface)
@@ -651,22 +739,22 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         if ifindex is None:
             logging.warn("Stale configuration for %s found", iface)
-        else:
-            if binding.is_valid():
-                binding.iface = iface
-                self.clients[binding.mac] = binding
-                self.rev_clients[iface] = binding.mac
-                if binding.link is None:
-                    self.subnets[iface] = Subnet(binding.subnet,
-                                                 binding.gateway)
-                    self.v6nets[iface] = Subnet(binding.subnet6,
-                                                binding.gateway6)
-                else:
-                    self.subnets[iface] = parse_routing_table(binding.link)
-                    self.v6nets[iface] = parse_routing_table(binding.link, 6)
-                logging.debug("Added client %s on %s", binding.mac, iface)
-                self.ifaces[ifindex] = iface
-                self.rev_ifaces[iface] = ifindex
+        elif binding.is_valid():
+            binding.iface = iface
+            self.clients[binding.mac] = binding
+            self.rev_clients[iface] = binding.mac
+            if binding.link is None:
+                self.subnets[iface] = Subnet(binding.subnet,
+                                             binding.gateway)
+                self.v6nets[iface] = Subnet(binding.subnet6,
+                                            binding.gateway6)
+            else:
+                self.subnets[iface] = parse_routing_table(binding.link)
+                self.v6nets[iface] = parse_routing_table(binding.link, 6)
+            logging.debug("Added client %s on %s", binding.mac, iface)
+            self.ifaces[ifindex] = iface
+            self.rev_ifaces[iface] = ifindex
+            self.notify_bindings([binding])
 
     def remove_iface(self, iface):
         """ Cleanup clients on a removed interface
@@ -978,7 +1066,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         resp = Ether(dst=binding.mac, src=ifmac)
-        
+
         if ipv6:
             resp /= IPv6(src=binding.dns_server_ip6 or\
                              self.dns_server_ip6 or\
@@ -997,35 +1085,53 @@ class VMNetProxy(object): # pylint: disable=R0902
         qtypename = scapy_dns.dnsqtypes[qtype]
         addr = None
 
-        if (qtypename != "A") and (qtypename != "AAAA"):
+        if qtypename == "A":
+            attr = "addresses"
+        elif qtypename == "AAAA":
+            attr = "addresses6"
+        elif qtypename == "TXT":
+            attr = "txts"
+        else:
+            attr = None
+
+        if attr is None:
             logging.warn("Unsupported request for %s type %s from %s on %s",
                          qname, qtypename, binding.mac, iface)
         else:
-            q6 = qtypename == "AAAA"
             # first look in binding
-            addr = (binding.addresses6 if q6 else binding.addresses).get(qname)
+            addr = getattr(binding, attr).get(qname)
             if addr is None:
                 # look in all address lists specified by the binding
                 for alname in binding.address_lists:
                     al = self.address_lists.get("address_list_" + alname)
                     if al is not None:
-                        addr = (al.addresses6 if q6 else al.addresses).get(qname)
+                        addr = getattr(al, attr).get(qname)
                         if addr is not None:
                             break
             if addr is None:
                 # look in global config
-                addr = (self.addresses6 if q6 else self.addresses).get(qname)
-            if addr is None and\
-               self.dns_forward and\
-               (binding.dns_forward is not False):
-                logging.debug("Performing DNS lookup for %s type %s from %s on %s", qname, qtypename, binding.mac, iface)
-                try:
-                    info = socket.getaddrinfo(qname, None,
-                        socket.AF_INET if qtypename == "A" else socket.AF_INET6)
-                    if info:
-                        addr = info[0][4][0]
-                except socket.error, e:
-                    logging.warn("DNS lookup for %s type %s failed from %s on %s: %s", qname, qtypename, binding.mac, iface, str(e))
+                addr = getattr(self, attr).get(qname)
+
+        if addr is None and\
+           self.dns_forward and\
+           (binding.dns_forward is not False) and\
+           (not (binding.no_forward and
+                 qname.endswith(binding.no_forward))) and\
+           (not next((al for al in binding.address_lists if
+                      al.no_forward and qname.endswith(al.no_forward)))) and \
+           (not (self.no_forward and qname.endswith(self.no_forward))):
+            logging.debug("Performing DNS lookup for %s type %s from %s on %s",
+                          qname, qtypename, binding.mac, iface)
+            try:
+                info = socket.getaddrinfo(qname, None,
+                    socket.AF_INET if qtypename == "A" else socket.AF_INET6)
+                if info:
+                    addr = info[0][4][0]
+            except socket.error, e:
+                logging.warn("DNS lookup for %s type %s failed "
+                             "from %s on %s: %s",
+                             qname, qtypename, binding.mac, iface, str(e))
+
         if addr:
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1,
                         an=DNSRR(rrname=qname,
@@ -1036,15 +1142,58 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, rcode='name-error')
 
         logging.info("DNS %s->%s to %s (%s) on %s",
-                     qname, addr, binding.mac, resp[IPv6 if ipv6 else IP].dst, iface)
+                     qname, addr, binding.mac,
+                     resp[IPv6 if ipv6 else IP].dst, iface)
 
         self.sendp(resp, iface)
 
     def dns_response(self, i, payload): # pylint: disable=W0613,R0914
-        return self._dns_response(i, payload, False)
+        self._dns_response(i, payload, False)
 
     def dns6_response(self, i, payload): # pylint: disable=W0613,R0914
-        return self._dns_response(i, payload, True) 
+        self._dns_response(i, payload, True)
+
+    def _notify_handle(self, i, payload, ipv6): # pylint: disable=W0613
+        """ Handle a notify packet
+
+        """
+        indev = payload.get_physindev() or payload.get_indev()
+        try:
+            # Get the actual interface from the ifindex
+            iface = self.ifaces[indev]
+        except KeyError:
+            # We don't know anything about this interface, so accept the packet
+            # and return
+            logging.debug("Ignoring notify request on unknown iface %d", indev)
+            # We don't know what to do with this packet, so let the kernel
+            # handle it
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return
+
+        # Decode the response - NFQUEUE relays IP packets
+        pkt = (IPv6 if ipv6 else IP)(payload.get_data())
+
+        # Signal the kernel that it shouldn't further process the packet
+        payload.set_verdict(nfqueue.NF_DROP)
+
+        try:
+            binding = self.clients[self.rev_clients[iface]]
+        except KeyError:
+            logging.warn("No client on %s", iface)
+            return
+
+        if not Raw in pkt:
+            logging.warn("Invalid request from %s on %s, no Raw"
+                         " payload found", binding.mac, iface)
+            return
+
+        binding.seq_in = pkt[Raw].load
+
+    def notify_handle(self, i, payload):
+        self._notify_handle(i, payload, False)
+
+    def notify6_handle(self, i, payload):
+        self._notify_handle(i, payload, True)
 
     def send_periodic_ra(self):
         # Use a separate thread as this may take a _long_ time with
@@ -1088,6 +1237,21 @@ class VMNetProxy(object): # pylint: disable=R0902
             i += 1
         logging.debug("Sent %d RAs in %.2f seconds", i, time.time() - start)
 
+    def send_periodic_notify(self):
+        # Use a separate thread as this may take a _long_ time with
+        # many interfaces and we want to be responsive in the mean time
+        threading.Thread(target=self._send_periodic_notify).start()
+
+    def _send_periodic_notify(self):
+        logging.debug("Sending out periodic notifications")
+        start = time.time()
+        i = 0
+        for client in self.clients.values():
+            if client.seq_in != client.seq_out:
+                self.notify_bindings([client], False)
+                i += 1
+        logging.debug("Sent %d RAs in %.2f seconds", i, time.time() - start)
+
     def serve(self):
         """ Safely perform the main loop, freeing all resources upon exit
 
@@ -1108,17 +1272,24 @@ class VMNetProxy(object): # pylint: disable=R0902
         iwfd = self.notifier._fd # pylint: disable=W0212
 
         start = time.time()
+        max_timeout = None
+
         if self.ipv6_enabled:
-            timeout = self.ra_period
+            max_timeout = self.ra_period
             self.send_periodic_ra()
-        else:
-            timeout = None
+
+        if self.notify_enabled:
+            max_timeout = self.notify_period if max_timeout is None else \
+                          min(self.notify_period, max_timeout)
+            self.send_periodic_notify()
+
+        timeout = max_timeout
 
         while True:
             rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
             if xlist:
                 logging.warn("Warning: Exception on %s",
-                             ", ".join([ str(fd) for fd in xlist]))
+                             ", ".join([str(fd) for fd in xlist]))
 
             if rlist:
                 if iwfd in rlist:
@@ -1137,14 +1308,17 @@ class VMNetProxy(object): # pylint: disable=R0902
                         logging.warn("Unknown error processing fd %d: %s",
                                      fd, str(e))
 
-            if self.ipv6_enabled:
+            if max_timeout is not None:
                 # Calculate the new timeout
-                timeout = self.ra_period - (time.time() - start)
+                timeout = max_timeout - (time.time() - start)
 
                 if timeout <= 0:
                     start = time.time()
-                    self.send_periodic_ra()
-                    timeout = self.ra_period - (time.time() - start)
+                    if self.ipv6_enabled:
+                        self.send_periodic_ra()
+                    if self.notify_enabled:
+                        self.send_periodic_notify()
+                    timeout = max_timeout - (time.time() - start)
 
 
 if __name__ == "__main__":
@@ -1283,7 +1457,16 @@ if __name__ == "__main__":
             "dns_ttl": config["dns"]["ttl"],
             "dns_forward": config["dns"]["forward"],
             "addresses": config["addresses"],
-            "addresses6": config["addresses6"]
+            "addresses6": config["addresses6"],
+            "txts": config["txts"],
+            'no_forward': config["dns"]["no_forward"]
+        })
+
+    if config["notify"].as_bool("enable_notify"):
+        proxy_opts.update({
+            "notify_queue_num": config["notify"].as_int("notify_queue"),
+            "notify6_queue_num": config["notify"].as_int("notify6_queue"),
+            "notify_period": config["notify"].as_int("notify_period"),
         })
 
     # pylint: disable=W0142

@@ -52,13 +52,13 @@ ignore-iface-methods =
 defining-attr-methods = __init__,__new__,setUp
 
 [DESIGN]
-max-args = 15
+max-args = 30
 max-locals = 50
 max-returns = 10
-max-branchs = 80
+max-branches = 80
 max-statements = 200
 max-parents = 7
-max-attributes = 20
+max-attributes = 30
 # zero as struct-like (PODS) classes don't export any methods
 min-public-methods = 0
 max-public-methods = 50
@@ -107,4 +107,4 @@ disable-msg=W0511,R0922,W0201
 
 # The new pylint 0.21+ style (plus the similarities checker, which is no longer
 # a separate opiton, but a generic disable control)
-disable=W0511,R0922,W0201,R0922,R0801,I0011
+disable=W0511,R0922,W0201,R0922,R0801,I0011,C0111
