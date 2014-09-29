@@ -124,7 +124,7 @@ However, IPv4 addresses are resolved to MAC addresses using ARP, which `nfdhcpd`
 ebtables -t nat -A PREROUTING -p ARP -i tap0 --arp-ip-dst 10.0.1.50 -j arpreply --arpreply-mac 11:22:33:44:55:66
 ```
 
-You can resolve it to any unused MAC address on this network &mdash; `nfdhcpd` will pick up DNS packets to any destination.
+You can resolve it to any MAC address on this network &mdash; `nfdhcpd` will pick up DNS packets to any destination.
 
 # Isolation
 
