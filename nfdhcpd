@@ -1012,34 +1012,38 @@ class VMNetProxy(object): # pylint: disable=R0902
             payload.set_verdict(nfqueue.NF_ACCEPT)
             return
 
-        ifmac = self.get_iface_hw_addr(iface)
-        if not ifmac:
+        try:
+            binding = self.clients[self.rev_clients[iface]]
+        except KeyError:
+            logging.warn("No client on %s", iface)
+            payload.set_verdict(nfqueue.NF_DROP)
             return
-
-        subnet = self.v6nets[iface]
-        ifll = make_ll64(ifmac)
 
         ns = IPv6(payload.get_data())
 
         if not ICMPv6ND_NS in ns:
             logging.warn("Invalid request on %s, no ICMPv6ND_NS"
                          " payload found", iface)
+            payload.set_verdict(nfqueue.NF_DROP)
             return
 
         tgt = ns[ICMPv6ND_NS].tgt
 
-        if subnet.net.overlaps(tgt) and (str(tgt) != str(ifll)):
+        subnet = self.v6nets[iface]
+        if subnet.net.overlaps(tgt) and \
+           (str(tgt) != (binding.dns_server_ip6 or \
+                         self.dns_server_ip6 or
+                         binding.nameservers6[0])):
             logging.debug("Received NS for a non-routable IP (%s)", tgt)
             payload.set_verdict(nfqueue.NF_ACCEPT)
             return
 
         payload.set_verdict(nfqueue.NF_DROP)
 
-        try:
-            binding = self.clients[self.rev_clients[iface]]
-        except KeyError:
-            logging.warn("No client on %s", iface)
+        ifmac = self.get_iface_hw_addr(iface)
+        if not ifmac:
             return
+        ifll = make_ll64(ifmac)
 
         resp = Ether(src=ifmac, dst=binding.mac)/\
                IPv6(src=str(ifll), dst=ns.src)/\
@@ -1168,7 +1172,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                              qname, qtypename, binding.mac, iface, str(e))
 
         if addr:
-            resp /= DNS(id=pkt[DNS].id, qr=1, aa=1,
+            resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, ra=1,
                         an=DNSRR(rrname=qname,
                                  rdata=addr,
                                  type=qtype,
