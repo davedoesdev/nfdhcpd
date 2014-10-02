@@ -204,6 +204,7 @@ def parse_binding_file(path):
         mtu = None
         mac = None
         ip = None
+        ip6 = None
         link = None
         hostname = None
         subnet = None
@@ -234,6 +235,8 @@ def parse_binding_file(path):
                 mtu = int(line.split("=")[1].strip())
             elif line.startswith("IP="):
                 ip = line.split("=")[1].strip()
+            elif line.startswith("IP6="):
+                ip6 = line.split("=")[1].strip()
             elif line.startswith("MAC="):
                 mac = line.split("=")[1].strip()
             elif line.startswith("LINK="):
@@ -302,7 +305,7 @@ def parse_binding_file(path):
                       address_lists=address_lists,
                       no_forward=no_forward,
                       notify_port=notify_port, notify_ip=notify_ip,
-                      notify_ip6=notify_ip6)
+                      notify_ip6=notify_ip6, ip6=ip6)
     finally:
         iffile.close()
 
@@ -385,7 +388,8 @@ class Client(object):
                  dns_ttl=None, dns_forward=None,
                  addresses=None, addresses6=None, txts=None,
                  address_lists=None, no_forward=None,
-                 notify_port=None, notify_ip=None, notify_ip6=None):
+                 notify_port=None, notify_ip=None, notify_ip6=None,
+                 ip6=None):
         self.mtu = mtu
         self.mac = mac
         self.ip = ip
@@ -411,6 +415,7 @@ class Client(object):
         self.notify_port = notify_port
         self.notify_ip = notify_ip
         self.notify_ip6 = notify_ip6
+        self.ip6 = ip6
         self.iface = None
         self.seq_in = ""
         self.seq_out = ""
@@ -484,13 +489,6 @@ class Subnet(object):
 
         """
         return self.net.prefixlen()
-
-    def make_eui64(self, mac):
-        """ Compute an EUI-64 address from an EUI-48 (MAC) address in this
-        subnet.
-
-        """
-        return make_eui64(self.net, mac)
 
 
 class VMNetProxy(object): # pylint: disable=R0902
@@ -1035,7 +1033,14 @@ class VMNetProxy(object): # pylint: disable=R0902
                          self.dns_server_ip6 or
                          binding.nameservers6[0])):
             logging.debug("Received NS for a non-routable IP (%s)", tgt)
-            payload.set_verdict(nfqueue.NF_ACCEPT)
+            if binding.ip6:
+                logging.debug("Setting source to %s", binding.ip6)
+                ns.src = binding.ip6
+                del ns.cksum
+                del ns[ICMPv6ND_NS].cksum
+                payload.set_verdict_modified(nfqueue.NF_ACCEPT, str(ns), len(ns))
+            else:
+                payload.set_verdict(nfqueue.NF_ACCEPT)
             return
 
         payload.set_verdict(nfqueue.NF_DROP)
