@@ -124,7 +124,7 @@ However, IPv4 addresses are resolved to MAC addresses using ARP, which `nfdhcpd`
 ebtables -t nat -A PREROUTING -p ARP -i tap0 --arp-ip-dst 10.0.1.50 -j arpreply --arpreply-mac 11:22:33:44:55:66
 ```
 
-You can resolve it to any unused MAC address on this network &mdash; `nfdhcpd` will pick up DNS packets to any destination.
+You can resolve it to any MAC address on this network &mdash; `nfdhcpd` will pick up DNS packets to any destination.
 
 # Isolation
 
@@ -143,14 +143,14 @@ ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff
 # Allow packets to solicited-node multicast addresses (for neighbour solicitation)
 # nfdhcpd checks the request is for the allocated prefix
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -s fde5:824d:d315:3bb1:5054:ff:fe12:3457 -d ff02:0:0:0:0:1:ff00::/104 -j ACCEPT
-ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/24 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
+ip6tables -A FORWARD -m physdev --physdev-out tap0 -s fde5:824d:d315:3bb1::/64 -d fde5:824d:d315:3bb1:5054:ff:fe12:3457 -j ACCEPT
 ip6tables -A FORWARD -m physdev --physdev-in tap0 -j REJECT
 ip6tables -A FORWARD -m physdev --physdev-out tap0 -j REJECT
 
 # Stop any packets not from allocated MAC address
 ebtables -A FORWARD -i tap0 -s ! 52:54:00:12:34:57 -j DROP
 # Allow ARP requests for this IP address from subnet
-ebtables -A FORWARD -o tap0 -p arp --arp-opcode request --arp-ip-src 10.0.1.0/24 --arp-ip-dst 10.0.1.20 -j ACCEPT
+ebtables -A FORWARD -o tap0 -p arp --arp-opcode request --arp-ip-src 10.0.1.0/64 --arp-ip-dst 10.0.1.20 -j ACCEPT
 # Stop any packets not for allocated MAC address
 ebtables -A FORWARD -o tap0 -d ! 52:54:00:12:34:57 -j DROP
 # Allow ARP replies from this IP address to subnet
