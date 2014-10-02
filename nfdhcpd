@@ -29,6 +29,7 @@ import logging.handlers
 import threading
 import traceback
 import subprocess
+from binascii import hexlify
 
 import daemon
 import daemon.pidlockfile
@@ -584,8 +585,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             self.notify_enabled = True
 
         if notify6_queue_num is not None:
-            self._setup_nfqueue(notify6_queue_num, AF_INET6,
-                                self.notify6_handle)
+            self._setup_nfqueue(notify6_queue_num, AF_INET6, self.notify6_handle)
             self.notify_enabled = True
 
     def _cleanup(self):
@@ -724,23 +724,40 @@ class VMNetProxy(object): # pylint: disable=R0902
                       UDP(sport=b.notify_port, dport=b.notify_port)/\
                       b.seq_out
 
-                logging.info("notify to %s (%s) on %s",
-                             b.mac, b.notify_ip, b.iface)
-                self.sendp(pkt, b.iface)
+                logging.info("notify to %s (%s) on %s: %s",
+                             b.mac, b.ip, b.iface, hexlify(b.seq_out))
+
+                try:
+                    self.sendp(pkt, b.iface)
+                except socket.error, e:
+                    logging.warn("Notify to %s (%s) on %s failed: %s",
+                                 b.mac, b.notify_ip, b.iface, str(e))
+                except Exception, e:
+                    logging.warn("Unkown error during notify to %s (%s) on %s: %s",
+                                 b.mac, b.notify_ip, b.iface, str(e))
 
             if b.notify_ip6:
                 if update and not updated:
                     b.seq_out = os.urandom(16)
                     updated = True
 
+                ifll = str(make_ll64(b.mac))
                 pkt = Ether(src=ifmac, dst=b.mac)/\
-                      IPv6(src=b.notify_ip6, dst=str(make_ll64(b.mac)))/\
+                      IPv6(src=b.notify_ip6, dst=ifll)/\
                       UDP(sport=b.notify_port, dport=b.notify_port)/\
                       b.seq_out
 
-                logging.info("notify to %s (%s) on %s",
-                             b.mac, b.notify_ip6, b.iface)
-                self.sendp(pkt, b.iface)
+                logging.info("notify to %s (%s) on %s: %s",
+                             b.mac, ifll, b.iface, hexlify(b.seq_out))
+
+                try:
+                    self.sendp(pkt, b.iface)
+                except socket.error, e:
+                    logging.warn("Notify to %s (%s) on %s failed: %s",
+                                 b.mac, b.notify_ip6, b.iface, str(e))
+                except Exception, e:
+                    logging.warn("Unkown error during notify to %s (%s) on %s: %s",
+                                 b.mac, b.notify_ip6, b.iface, str(e))
 
     def add_iface(self, path):
         """ Add an interface to monitor
@@ -748,13 +765,14 @@ class VMNetProxy(object): # pylint: disable=R0902
         """
         iface = os.path.basename(path)
 
-        if iface.startswith("address_list"):
+        if iface.startswith("address_list_"):
+            iface = iface[13:]
             logging.debug("Updating address list %s", iface)
             al = parse_address_list_file(path)
             if al is not None:
                 self.address_lists[iface] = al
             self.notify_bindings([b for b in self.clients.itervalues()
-                                 if iface in b.address_lists])
+                                  if iface in b.address_lists])
             return
 
         logging.debug("Updating configuration for %s", iface)
@@ -1026,13 +1044,15 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         tgt = ns[ICMPv6ND_NS].tgt
+        stgt = str(tgt)
 
         subnet = self.v6nets[iface]
         if subnet.net.overlaps(tgt) and \
-           (str(tgt) != (binding.dns_server_ip6 or \
-                         self.dns_server_ip6 or
-                         binding.nameservers6[0])):
-            logging.debug("Received NS for a non-routable IP (%s)", tgt)
+           (stgt != (binding.dns_server_ip6 or \
+                     self.dns_server_ip6 or
+                     binding.nameservers6[0])) and \
+           (stgt != binding.notify_ip6):
+            logging.debug("Received NS for a non-routable IP (%s)", stgt)
             if binding.ip6:
                 logging.debug("Setting source to %s", binding.ip6)
                 ns.src = binding.ip6
@@ -1232,6 +1252,9 @@ class VMNetProxy(object): # pylint: disable=R0902
             return
 
         binding.seq_in = pkt[Raw].load
+
+        logging.debug("Notify from %s (%s) on %s: %s",
+                      binding.mac, pkt.src, iface, hexlify(binding.seq_in))
 
     def notify_handle(self, i, payload):
         self._notify_handle(i, payload, False)
