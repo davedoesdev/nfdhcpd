@@ -1047,12 +1047,27 @@ class VMNetProxy(object): # pylint: disable=R0902
         stgt = str(tgt)
 
         subnet = self.v6nets[iface]
-        if subnet.net.overlaps(tgt) and \
-           (stgt != (binding.dns_server_ip6 or \
+
+        if (stgt == (binding.dns_server_ip6 or \
                      self.dns_server_ip6 or
-                     binding.nameservers6[0])) and \
-           (stgt != binding.notify_ip6):
-            logging.debug("Received NS for a non-routable IP (%s)", stgt)
+                     binding.nameservers6[0])) or \
+           (stgt == binding.notify_ip6):
+            payload.set_verdict(nfqueue.NF_DROP)
+
+            ifmac = self.get_iface_hw_addr(iface)
+            if not ifmac:
+                return
+            ifll = make_ll64(ifmac)
+
+            resp = Ether(src=ifmac, dst=binding.mac)/\
+                   IPv6(src=str(ifll), dst=ns.src)/\
+                   ICMPv6ND_NA(R=1, O=0, S=1, tgt=tgt)/\
+                   ICMPv6NDOptDstLLAddr(lladdr=ifmac)
+
+            logging.info("NA on %s for %s from %s", iface, tgt, ns.src)
+            self.sendp(resp, iface)
+        elif subnet.net.overlaps(tgt):
+            logging.debug("Received NS for an IP on this subnet (%s)", stgt)
             if binding.ip6:
                 logging.debug("Setting source to %s", binding.ip6)
                 ns.src = binding.ip6
@@ -1061,23 +1076,9 @@ class VMNetProxy(object): # pylint: disable=R0902
                 payload.set_verdict_modified(nfqueue.NF_ACCEPT, str(ns), len(ns))
             else:
                 payload.set_verdict(nfqueue.NF_ACCEPT)
-            return
-
-        payload.set_verdict(nfqueue.NF_DROP)
-
-        ifmac = self.get_iface_hw_addr(iface)
-        if not ifmac:
-            return
-        ifll = make_ll64(ifmac)
-
-        resp = Ether(src=ifmac, dst=binding.mac)/\
-               IPv6(src=str(ifll), dst=ns.src)/\
-               ICMPv6ND_NA(R=1, O=0, S=1, tgt=tgt)/\
-               ICMPv6NDOptDstLLAddr(lladdr=ifmac)
-
-        logging.info("NA on %s for %s", iface, tgt)
-        self.sendp(resp, iface)
-        return
+        else:
+            logging.debug("Dropping NS for an IP not on this subnet (%s)", stgt)
+            payload.set_verdict(nfqueue.NF_DROP)
 
     def _dns_response(self, i, payload, ipv6): # pylint: disable=W0613,R0914
         """ Generate a reply to a DNS query
@@ -1133,7 +1134,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp /= IPv6(src=binding.dns_server_ip6 or\
                              self.dns_server_ip6 or\
                              binding.nameservers6[0],
-                         dst=str(make_ll64(binding.mac)))
+                         dst=pkt.src)
         else:
             resp /= IP(src=binding.dns_server_ip or\
                            self.dns_server_ip or\
