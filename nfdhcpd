@@ -1477,7 +1477,8 @@ if __name__ == "__main__":
     if opts.daemonize:
         logfile = os.path.join(config["general"]["logdir"], LOG_FILENAME)
         handler = logging.handlers.RotatingFileHandler(logfile,
-                                                       maxBytes=2097152)
+                                                       maxBytes=2097152,
+                                                       backupCount=5)
     else:
         handler = logging.StreamHandler()
 
