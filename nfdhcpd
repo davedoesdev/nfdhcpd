@@ -30,6 +30,8 @@ import threading
 import traceback
 import subprocess
 from binascii import hexlify
+from functools import partial
+from StringIO import StringIO
 
 import daemon
 import daemon.pidlockfile
@@ -1175,6 +1177,10 @@ class VMNetProxy(object): # pylint: disable=R0902
                 # look in global config
                 addr = getattr(self, attr).get(qname)
 
+        if (addr is not None) and (qtypename == "TXT"):
+            addr = ''.join([(chr(len(l)) + l) for l in
+                            iter(partial(StringIO(addr).read, 255), '')])
+
         if addr is None and\
            self.dns_forward and\
            (binding.dns_forward is not False) and\
@@ -1188,6 +1194,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             logging.debug("Performing DNS lookup for %s type %s from %s on %s",
                           qname, qtypename, binding.mac, iface)
             try:
+                # TODO: this won't work for forwarded TXT records!
                 info = socket.getaddrinfo(qname, None,
                     socket.AF_INET if qtypename == "A" else socket.AF_INET6)
                 if info:
@@ -1207,7 +1214,7 @@ class VMNetProxy(object): # pylint: disable=R0902
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, rcode='name-error')
 
         logging.info("DNS %s->%s to %s (%s) on %s",
-                     qname, addr, binding.mac,
+                     qname, repr(addr), binding.mac,
                      resp[IPv6 if ipv6 else IP].dst, iface)
 
         self.sendp(resp, iface)
