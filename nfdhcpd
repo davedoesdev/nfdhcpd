@@ -37,6 +37,8 @@ import daemon
 import daemon.pidlockfile
 import nfqueue
 import pyinotify
+from dns import resolver
+from dns.exception import DNSException
 
 import IPy
 import socket
@@ -1194,15 +1196,25 @@ class VMNetProxy(object): # pylint: disable=R0902
             logging.debug("Performing DNS lookup for %s type %s from %s on %s",
                           qname, qtypename, binding.mac, iface)
             try:
-                # TODO: this won't work for forwarded TXT records!
-                info = socket.getaddrinfo(qname, None,
-                    socket.AF_INET if qtypename == "A" else socket.AF_INET6)
-                if info:
-                    addr = info[0][4][0]
-            except socket.error, e:
+                # getaddrinfo doesn't support TXT queries
+                #info = socket.getaddrinfo(qname, None,
+                #    socket.AF_INET if qtypename == "A" else socket.AF_INET6)
+                #if info:
+                #    addr = info[0][4][0]
+                info = resolver.query(qname, qtypename)
+                if info and len(info) > 0:
+                    if qtypename == "TXT":
+                        output = StringIO()
+                        info[0].to_wire(output)
+                        addr = output.getvalue()
+                        output.close()
+                    else:
+                        addr = info[0].address
+            except DNSException, e:
                 logging.warn("DNS lookup for %s type %s failed "
-                             "from %s on %s: %s",
-                             qname, qtypename, binding.mac, iface, str(e))
+                             "from %s on %s: %s/%s",
+                             qname, qtypename, binding.mac, iface,
+                             type(e), e)
 
         if addr:
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, ra=1,
