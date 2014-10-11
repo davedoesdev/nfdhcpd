@@ -891,7 +891,8 @@ class VMNetProxy(object): # pylint: disable=R0902
         resp = Ether(dst=mac, src=ifmac)/\
                IP(src=binding.dhcp_server_ip or\
                   self.dhcp_server_ip or\
-                  binding.nameservers[0],
+                  (binding.nameservers and binding.nameservers[0]) or\
+                  binding.ip, # not ideal but not configured with any other address
                   dst=binding.ip)/\
                UDP(sport=pkt[UDP].dport, dport=pkt[UDP].sport)/resp
         subnet = self.subnets[iface]
@@ -958,7 +959,8 @@ class VMNetProxy(object): # pylint: disable=R0902
             ("message-type", resp_type),
             ("server_id", binding.dhcp_server_ip or\
                           self.dhcp_server_ip or\
-                          binding.nameservers[0]),
+                          (binding.nameservers and binding.nameservers[0]) or\
+                          binding.ip),
             "end"
         ]
         resp /= DHCP(options=dhcp_options)
@@ -1053,8 +1055,10 @@ class VMNetProxy(object): # pylint: disable=R0902
         subnet = self.v6nets[iface]
 
         if (stgt == (binding.dns_server_ip6 or \
-                     self.dns_server_ip6 or
-                     binding.nameservers6[0])) or \
+                     self.dns_server_ip6 or \
+                     (binding.nameservers6 and binding.nameservers6[0]) or \
+                     # not ideal but no other address configured
+                     binding.ip6)) or \
            (stgt == binding.notify_ip6):
             payload.set_verdict(nfqueue.NF_DROP)
 
@@ -1137,12 +1141,14 @@ class VMNetProxy(object): # pylint: disable=R0902
         if ipv6:
             resp /= IPv6(src=binding.dns_server_ip6 or\
                              self.dns_server_ip6 or\
-                             binding.nameservers6[0],
+                             (binding.nameservers6 and binding.nameservers6[0]) or\
+                             binding.ip6,
                          dst=pkt.src)
         else:
             resp /= IP(src=binding.dns_server_ip or\
                            self.dns_server_ip or\
-                           binding.nameservers[0],
+                           (binding.nameserver and binding.nameservers[0]) or\
+                           binding.ip,
                        dst=binding.ip)
 
         resp /= UDP(sport=pkt[UDP].dport, dport=pkt[UDP].sport)
