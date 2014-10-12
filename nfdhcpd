@@ -216,6 +216,7 @@ def parse_binding_file(path):
         gateway = None
         subnet6 = None
         gateway6 = None
+        gateway6mac = None
         dhcp_server_ip = None
         dns_server_ip = None
         dns_server_ip6 = None
@@ -256,6 +257,8 @@ def parse_binding_file(path):
                 subnet6 = line.split("=")[1].strip()
             elif line.startswith("GATEWAY6="):
                 gateway6 = line.split("=")[1].strip()
+            elif line.startswith("GATEWAY6MAC="):
+                gateway6mac = line.split("=")[1].strip()
             elif line.startswith("DHCP_SERVER_IP="):
                 dhcp_server_ip = line.split("=")[1].strip()
             elif line.startswith("DNS_SERVER_IP="):
@@ -300,7 +303,7 @@ def parse_binding_file(path):
 
         return Client(mtu=mtu, mac=mac, ip=ip, link=link, hostname=hostname,
                       subnet=subnet, gateway=gateway,
-                      subnet6=subnet6, gateway6=gateway6,
+                      subnet6=subnet6, gateway6=gateway6, gateway6mac=gateway6mac,
                       dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
                       nameservers6=nameservers6, domain=domain,
                       dns_server_ip=dns_server_ip,
@@ -387,7 +390,7 @@ class ClientFileHandler(pyinotify.ProcessEvent):
 
 class Client(object):
     def __init__(self, mtu=None, mac=None, ip=None, link=None, hostname=None,
-                 subnet=None, gateway=None, subnet6=None, gateway6=None,
+                 subnet=None, gateway=None, subnet6=None, gateway6=None, gateway6mac=None,
                  dhcp_server_ip=None, nameservers=None, nameservers6=None,
                  domain=None, dns_server_ip=None, dns_server_ip6=None,
                  dns_ttl=None, dns_forward=None,
@@ -404,6 +407,7 @@ class Client(object):
         self.gateway = gateway
         self.subnet6 = subnet6
         self.gateway6 = gateway6
+        self.gateway6mac = gateway6mac
         self.dhcp_server_ip = dhcp_server_ip
         self.dns_server_ip = dns_server_ip
         self.dns_server_ip6 = dns_server_ip6
@@ -1003,8 +1007,10 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         resp = Ether(dst=binding.mac, src=ifmac)/\
                IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
-               ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
-                                     prefixlen=subnet.prefixlen)
+               ICMPv6NDOptPrefixInfo(
+                    prefix=subnet.gw or str(subnet.prefix),
+                    prefixlen=subnet.prefixlen,
+                    R=1 if subnet.gw else 0)
 
         nameservers = binding.nameservers6 or self.ipv6_nameservers
 
@@ -1049,6 +1055,12 @@ class VMNetProxy(object): # pylint: disable=R0902
             payload.set_verdict(nfqueue.NF_DROP)
             return
 
+        ifmac = self.get_iface_hw_addr(iface)
+        if not ifmac:
+            payload.set_verdict(nfqueue.NF_DROP)
+            return
+        ifll = str(make_ll64(ifmac))
+
         tgt = ns[ICMPv6ND_NS].tgt
         stgt = str(tgt)
 
@@ -1059,20 +1071,17 @@ class VMNetProxy(object): # pylint: disable=R0902
                      (binding.nameservers6 and binding.nameservers6[0]) or \
                      # not ideal but no other address configured
                      binding.ip6)) or \
-           (stgt == binding.notify_ip6):
+           (stgt == binding.notify_ip6) or \
+           ((stgt == ifll) and binding.gateway6mac):
             payload.set_verdict(nfqueue.NF_DROP)
 
-            ifmac = self.get_iface_hw_addr(iface)
-            if not ifmac:
-                return
-            ifll = make_ll64(ifmac)
-
+            lladdr=binding.gateway6mac if stgt == ifll else ifmac
             resp = Ether(src=ifmac, dst=binding.mac)/\
-                   IPv6(src=str(ifll), dst=ns.src)/\
+                   IPv6(src=ifll, dst=ns.src)/\
                    ICMPv6ND_NA(R=1, O=0, S=1, tgt=tgt)/\
-                   ICMPv6NDOptDstLLAddr(lladdr=ifmac)
+                   ICMPv6NDOptDstLLAddr(lladdr=lladdr)
 
-            logging.info("NA on %s for %s from %s", iface, tgt, ns.src)
+            logging.info("NA on %s for %s from %s: %s", iface, tgt, ns.src, lladdr)
             self.sendp(resp, iface)
         elif subnet.net.overlaps(tgt):
             logging.debug("Received NS for an IP on this subnet (%s)", stgt)
@@ -1312,14 +1321,20 @@ class VMNetProxy(object): # pylint: disable=R0902
             ifll = make_ll64(ifmac)
             resp = Ether(src=ifmac)/\
                    IPv6(src=str(ifll))/ICMPv6ND_RA(routerlifetime=14400)/\
-                   ICMPv6NDOptPrefixInfo(prefix=str(subnet.prefix),
-                                         prefixlen=subnet.prefixlen)
+                   ICMPv6NDOptPrefixInfo(
+                        prefix=subnet.gw or str(subnet.prefix),
+                        prefixlen=subnet.prefixlen,
+                        R=1 if subnet.gw else 0)
 
             nameservers = client.nameservers6 or self.ipv6_nameservers
 
             if nameservers:
                 resp /= ICMPv6NDOptRDNSS(dns=nameservers,
                                          lifetime=self.ra_period * 3)
+
+            if client.mtu:
+                resp /= ICMPv6NDOptMTU(mtu=client.mtu)
+
             try:
                 self.sendp(resp, iface)
             except socket.error, e:
