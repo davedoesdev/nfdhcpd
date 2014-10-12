@@ -1147,7 +1147,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         else:
             resp /= IP(src=binding.dns_server_ip or\
                            self.dns_server_ip or\
-                           (binding.nameserver and binding.nameservers[0]) or\
+                           (binding.nameservers and binding.nameservers[0]) or\
                            binding.ip,
                        dst=binding.ip)
 
