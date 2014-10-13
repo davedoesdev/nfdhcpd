@@ -1239,7 +1239,9 @@ class VMNetProxy(object): # pylint: disable=R0902
                                  type=qtype,
                                  ttl=binding.dns_ttl or self.dns_ttl))
         else:
-            resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, rcode='name-error')
+            resp /= DNS(id=pkt[DNS].id, qr=1, aa=1,
+                        qd=pkt[DNSQR],
+                        rcode='name-error')
 
         logging.info("DNS %s->%s to %s (%s) on %s",
                      qname, repr(addr), binding.mac,
