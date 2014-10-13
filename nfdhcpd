@@ -1145,15 +1145,15 @@ class VMNetProxy(object): # pylint: disable=R0902
                          " payload found", binding.mac, iface)
             return
 
-        resp = Ether(dst=binding.mac, src=ifmac)
-
         if ipv6:
+            resp = Ether(dst=binding.mac, src=ifmac)
             resp /= IPv6(src=binding.dns_server_ip6 or\
                              self.dns_server_ip6 or\
                              (binding.nameservers6 and binding.nameservers6[0]) or\
                              binding.ip6,
                          dst=pkt.src)
         else:
+            resp = Ether(dst=binding.mac, src=binding.mac)
             resp /= IP(src=binding.dns_server_ip or\
                            self.dns_server_ip or\
                            (binding.nameservers and binding.nameservers[0]) or\
@@ -1233,6 +1233,7 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         if addr:
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1, ra=1,
+                        qd=pkt[DNSQR],
                         an=DNSRR(rrname=qname,
                                  rdata=addr,
                                  type=qtype,
