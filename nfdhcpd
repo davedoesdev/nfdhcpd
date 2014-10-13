@@ -216,7 +216,7 @@ def parse_binding_file(path):
         gateway = None
         subnet6 = None
         gateway6 = None
-        gateway6mac = None
+        gateway6_mac = None
         dhcp_server_ip = None
         dns_server_ip = None
         dns_server_ip6 = None
@@ -257,8 +257,8 @@ def parse_binding_file(path):
                 subnet6 = line.split("=")[1].strip()
             elif line.startswith("GATEWAY6="):
                 gateway6 = line.split("=")[1].strip()
-            elif line.startswith("GATEWAY6MAC="):
-                gateway6mac = line.split("=")[1].strip()
+            elif line.startswith("GATEWAY6_MAC="):
+                gateway6_mac = line.split("=")[1].strip()
             elif line.startswith("DHCP_SERVER_IP="):
                 dhcp_server_ip = line.split("=")[1].strip()
             elif line.startswith("DNS_SERVER_IP="):
@@ -303,7 +303,7 @@ def parse_binding_file(path):
 
         return Client(mtu=mtu, mac=mac, ip=ip, link=link, hostname=hostname,
                       subnet=subnet, gateway=gateway,
-                      subnet6=subnet6, gateway6=gateway6, gateway6mac=gateway6mac,
+                      subnet6=subnet6, gateway6=gateway6, gateway6_mac=gateway6_mac,
                       dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
                       nameservers6=nameservers6, domain=domain,
                       dns_server_ip=dns_server_ip,
@@ -390,7 +390,7 @@ class ClientFileHandler(pyinotify.ProcessEvent):
 
 class Client(object):
     def __init__(self, mtu=None, mac=None, ip=None, link=None, hostname=None,
-                 subnet=None, gateway=None, subnet6=None, gateway6=None, gateway6mac=None,
+                 subnet=None, gateway=None, subnet6=None, gateway6=None, gateway6_mac=None,
                  dhcp_server_ip=None, nameservers=None, nameservers6=None,
                  domain=None, dns_server_ip=None, dns_server_ip6=None,
                  dns_ttl=None, dns_forward=None,
@@ -407,7 +407,7 @@ class Client(object):
         self.gateway = gateway
         self.subnet6 = subnet6
         self.gateway6 = gateway6
-        self.gateway6mac = gateway6mac
+        self.gateway6_mac = gateway6_mac
         self.dhcp_server_ip = dhcp_server_ip
         self.dns_server_ip = dns_server_ip
         self.dns_server_ip6 = dns_server_ip6
@@ -1072,10 +1072,10 @@ class VMNetProxy(object): # pylint: disable=R0902
                      # not ideal but no other address configured
                      binding.ip6)) or \
            (stgt == binding.notify_ip6) or \
-           ((stgt == ifll) and binding.gateway6mac):
+           ((stgt == ifll) and binding.gateway6_mac):
             payload.set_verdict(nfqueue.NF_DROP)
 
-            lladdr=binding.gateway6mac if stgt == ifll else ifmac
+            lladdr=binding.gateway6_mac if stgt == ifll else ifmac
             resp = Ether(src=ifmac, dst=binding.mac)/\
                    IPv6(src=ifll, dst=ns.src)/\
                    ICMPv6ND_NA(R=1, O=0, S=1, tgt=tgt)/\
