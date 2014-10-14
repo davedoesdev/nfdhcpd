@@ -1195,9 +1195,11 @@ class VMNetProxy(object): # pylint: disable=R0902
                 # look in global config
                 addr = getattr(self, attr).get(qname)
 
-        if (addr is not None) and (qtypename == "TXT"):
-            addr = ''.join([(chr(len(l)) + l) for l in
-                            iter(partial(StringIO(addr).read, 255), '')])
+        if (addr is not None):
+            ttl=binding.dns_ttl or self.dns_ttl
+            if (qtypename == "TXT"):
+                addr = ''.join([(chr(len(l)) + l) for l in
+                                iter(partial(StringIO(addr).read, 255), '')])
 
         if ((attr is not None) or (qtypename == "PTR")) and \
            (addr is None) and\
@@ -1220,6 +1222,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                 #    addr = info[0][4][0]
                 info = resolver.query(qname, qtypename)
                 if info and len(info) > 0:
+                    ttl = info.ttl
                     if qtypename == "TXT":
                         output = StringIO()
                         info[0].to_wire(output)
@@ -1241,7 +1244,7 @@ class VMNetProxy(object): # pylint: disable=R0902
                         an=DNSRR(rrname=qname,
                                  rdata=addr,
                                  type=qtype,
-                                 ttl=binding.dns_ttl or self.dns_ttl))
+                                 ttl=ttl))
         else:
             resp /= DNS(id=pkt[DNS].id, qr=1, aa=1,
                         qd=pkt[DNSQR],
