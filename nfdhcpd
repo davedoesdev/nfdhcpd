@@ -771,43 +771,47 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Add an interface to monitor
 
         """
-        iface = os.path.basename(path)
+        try:
+            iface = os.path.basename(path)
 
-        if iface.startswith("address_list_"):
-            iface = iface[13:]
-            logging.debug("Updating address list %s", iface)
-            al = parse_address_list_file(path)
-            if al is not None:
-                self.address_lists[iface] = al
-            self.notify_bindings([b for b in self.clients.itervalues()
-                                  if iface in b.address_lists])
-            return
+            if iface.startswith("address_list_"):
+                iface = iface[13:]
+                logging.debug("Updating address list %s", iface)
+                al = parse_address_list_file(path)
+                if al is not None:
+                    self.address_lists[iface] = al
+                self.notify_bindings([b for b in self.clients.itervalues()
+                                      if iface in b.address_lists])
+                return
 
-        logging.debug("Updating configuration for %s", iface)
-        binding = parse_binding_file(path)
-        if binding is None:
-            return
-        ifindex = self.get_ifindex(iface)
+            logging.debug("Updating configuration for %s", iface)
+            binding = parse_binding_file(path)
+            if binding is None:
+                return
+            ifindex = self.get_ifindex(iface)
 
-        if ifindex is None:
-            logging.warn("Stale configuration for %s found", iface)
-        elif binding.is_valid():
-            binding.iface = iface
-            self.clients[binding.mac] = binding
-            self.rev_clients[iface] = binding.mac
-            if binding.link is None:
-                self.subnets[iface] = Subnet(binding.subnet,
-                                             binding.gateway)
-                self.v6nets[iface] = Subnet(binding.subnet6,
-                                            binding.gateway6)
-            else:
-                self.subnets[iface] = parse_routing_table(binding.link)
-                self.v6nets[iface] = parse_routing_table(binding.link, 6)
-            logging.debug("Added client %s on %s", binding.mac, iface)
-            self.ifaces[ifindex] = iface
-            self.rev_ifaces[iface] = ifindex
-            self.notify_bindings([binding])
-
+            if ifindex is None:
+                logging.warn("Stale configuration for %s found", iface)
+            elif binding.is_valid():
+                binding.iface = iface
+                self.clients[binding.mac] = binding
+                self.rev_clients[iface] = binding.mac
+                if binding.link is None:
+                    self.subnets[iface] = Subnet(binding.subnet,
+                                                 binding.gateway)
+                    self.v6nets[iface] = Subnet(binding.subnet6,
+                                                binding.gateway6)
+                else:
+                    self.subnets[iface] = parse_routing_table(binding.link)
+                    self.v6nets[iface] = parse_routing_table(binding.link, 6)
+                logging.debug("Added client %s on %s", binding.mac, iface)
+                self.ifaces[ifindex] = iface
+                self.rev_ifaces[iface] = ifindex
+                self.notify_bindings([binding])
+        except Exception, e:
+            logging.warn("Error while adding interface from path %s: %s",
+                         path, str(e))
+            
     def remove_iface(self, iface):
         """ Cleanup clients on a removed interface
 
