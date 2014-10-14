@@ -24,6 +24,9 @@ IP=10.0.1.40
 HOSTNAME=foobar
 SUBNET=10.0.1.0/24
 SUBNET6=fde5:824d:d315:3bb1::/64
+GATEWAY=10.0.1.90
+GATEWAY6=fde5:824d:d315:3bb1::90
+GATEWAY6_MAC=7e:b7:70:3b:81:77
 NAMESERVERS=10.0.1.50
 NAMESERVERS6=fde5:824d:d315:3bb1::1
 ADDRESS:www.google.com.=10.0.1.3
@@ -47,6 +50,12 @@ This configures `tap0` like so:
 - In IPv6 router advertisements (including responses to ICMPv6 router solicitations), set the prefix to `fde5:824d:d315:3bb1::/64` (a private address range) and the DNS server option to `fde5:824d:d315:3bb1::1`. The DNS server address should be any unused address on this network. You can use the same address in multiple binding files.
 
   The attached device (usually a VM) is assumed to have a link-local address derived using Stateless Address Autoconfiguration (SLAAC), by combining the prefix with EUI-64. 
+
+- Add a gateway (`10.0.1.90`) for IPv4 traffic not on the subnet. This is optional.
+
+- Add a gateway (`fde5:824d:d315:3bb1::90`) for IPv6 traffic outside the prefix. This is optional.
+
+  Note you need to supply the MAC address for the gateway too (here `7e:b7:70:3b:81:77`). Even though nfdhcpd sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So nfdhcpd will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
 
 - Add IPv4 and IPv6 DNS entries for `www.google.com` (obviously this is just an example).
 
