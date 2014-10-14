@@ -51,11 +51,11 @@ This configures `tap0` like so:
 
   The attached device (usually a VM) is assumed to have a link-local address derived using Stateless Address Autoconfiguration (SLAAC), by combining the prefix with EUI-64. 
 
-- Add a gateway (10.0.1.90) for IPv4 traffic not on the subnet. This is optional.
+- Add a gateway (`10.0.1.90`) for IPv4 traffic not on the subnet. This is optional.
 
-- Add a gateway (fde5:824d:d315:3bb1::90) for IPv6 traffic outside the prefix. This is optional.
+- Add a gateway (`fde5:824d:d315:3bb1::90`) for IPv6 traffic outside the prefix. This is optional.
 
-  Note you need to supply the MAC address for the gateway too (here 7e:b7:70:3b:81:77). Even though nfdhcpd sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So nfdhcpd will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
+  Note you need to supply the MAC address for the gateway too (here `7e:b7:70:3b:81:77`). Even though nfdhcpd sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So nfdhcpd will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
 
 - Add IPv4 and IPv6 DNS entries for `www.google.com` (obviously this is just an example).
 
