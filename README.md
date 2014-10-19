@@ -166,11 +166,13 @@ The `debian` branch can make a `.deb` file for installing on Debian-based distri
 dpkg-buildpackage -us -uc
 ```
 
-Note, however, that a couple of the package's dependencies currently have issues which means things aren't quite as smooth as they should be.
+A pre-made package, `nfdhcpd_0.7_all.deb` (compiled on Ubuntu 14.04) can be found in the `dist` directory.
 
-- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcpd` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you can build version 0.5 from [source](https://launchpad.net/ubuntu/+source/nfqueue-bindings/0.5-1).
+Note that a couple of the package's dependencies currently have issues which means things aren't quite as smooth as they should be.
 
-- `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) but please visit the bug page and say it affects you. If you remake the package from source, it does include all its files.
+- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcpd` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you can find a modified package `python-nfqueue_0.4-6.1_amd64.deb` (and associated source `nfqueue-bindings_0.4-6.1.debian.tar.gz`) in the `dist` directory.
+
+- `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) but please visit the bug page and say it affects you. If you remake the package from source, it does include all its files. A pre-made package, `python-cap-ng_0.7.3-1ubuntu2.1_amd64.deb`, can be found in the `dist` directory.
 
 # Acknowledgements
 
