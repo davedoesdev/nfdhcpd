@@ -1,7 +1,7 @@
 Source: nfdhcpd
 Section: net
 Priority: extra
-Maintainer: Apollon Oikonomopoulos <apollon@noc.grnet.gr>
+Maintainer: David Halls <dahalls@gmail.com>
 Build-Depends: debhelper (>= 7)
 Standards-Version: 3.9.1
 
@@ -11,7 +11,7 @@ Depends: ${misc:Depends}, ${python:Depends}, python-scapy(>= 2.0.1-1),
          python-daemon(>=1.5.2-1), python-pyinotify(>=0.7.1-1),
          python-ipy(>=1:0.62-1), nfqueue-bindings-python(>=0.3-2),
          python-cap-ng(>=0.6.0-1), python(>=2.4), python-configobj(>= 4.5.2-1)
-Description: A small DHCP/NDP proxy for virtual machines
+Description: A small DHCP/NDP/DNS proxy for virtual machines
  nfdhcpd is a small DHCP/NDP/RA proxy for virtual machines. Its intended use is
- to provide network configuration for routed (not bridged) VM instances. It
- supports DHCP, IPv6 NDP proxy and ICMPv6 RA RDNSS (RFC 5006).
+ to provide network configuration for VM instances. It supports DHCP, IPv6 NDP
+ proxy, ICMPv6 RA RDNSS (RFC 5006) and DNS.
