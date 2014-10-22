@@ -1,13 +1,10 @@
 nfdhcpd (0.7) UNRELEASED; urgency=medium
 
   [ David Halls ]
-  * Non-maintainer upload.
   * DNS support.
   * Subnet config in binding files.
   * Custom notification protocol.
   * See https://github.com/davedoesdev/nfdhcpd
-
-  [ David Halls ]
   * Rev version
 
  -- david <david@david-Latitude-E6440>  Sun, 19 Oct 2014 21:30:11 +0100
