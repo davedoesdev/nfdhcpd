@@ -31,7 +31,7 @@ NAMESERVERS=10.0.1.50
 NAMESERVERS6=fde5:824d:d315:3bb1::1
 ADDRESS:www.google.com.=10.0.1.3
 ADDRESS:database.=10.0.1.1
-ADDkRESS6:www.google.com.=1234:5678:abcd:ef01:1234:5678:9abc:def0
+ADDRESS6:www.google.com.=1234:5678:abcd:ef01:1234:5678:9abc:def0
 TXT:table.=Users
 ADDRESS_LISTS=foo
 NOTIFY_PORT=25000
@@ -63,7 +63,7 @@ This configures `tap0` like so:
 
 - Add a TXT DNS entry for `table`, value `Users`.
 
-- Use a separate address list `foo` for other addresses. Address lists are files containing only `ADDRESS:` and `ADDRESS6:` entries. They live alongside binding files and must be named `address_list_<name>`. So in this case `/var/lib/nfdhcpd/address_list_foo`. 
+- Use a separate address list `foo` for other addresses. Address lists are files containing only `ADDRESS:`, `ADDRESS6:` and `TXT:` entries. They live alongside binding files and must be named `address_list_<name>`. So in this case `/var/lib/nfdhcpd/address_list_foo`. 
 
 DNS entries and address lists are useful so multi-VM applications don't have to know which IP address each VM is configured with.
 
