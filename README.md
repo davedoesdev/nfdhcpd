@@ -1,12 +1,12 @@
 # nfdhcpd
 
-nfdhcpd is a daemon which processes packets placed on netfilter queues by iptables.
+`nfdhcpd` is a daemon which processes packets placed on netfilter queues by iptables.
 
 For details about the original project, see the [upstream documentation](https://www.synnefo.org/docs/nfdhcpd/latest/index.html).
 
-nfdhcpd can process IPv4 DHCP and IPv6 Router and Neighbour Solicitation messages. In addition, I've made the following enhancements:
+`nfdhcpd` can process IPv4 DHCP and IPv6 Router and Neighbour Solicitation messages. In addition, I've made the following enhancements:
 
-- Added support for DNS A, AAAA and TXT records. Different DNS records can be defined in binding files for each network interface you use with nfdhcpd. You can also forward DNS queries to the system resolver.
+- Added support for DNS A, AAAA and TXT records. Different DNS records can be defined in binding files for each network interface you use with `nfdhcpd`. You can also forward DNS queries to the system resolver.
 
 - Allow subnet configuration to be defined in binding files.
 
@@ -55,7 +55,7 @@ This configures `tap0` like so:
 
 - Add a gateway (`fde5:824d:d315:3bb1::90`) for IPv6 traffic outside the prefix. This is optional.
 
-  Note you need to supply the MAC address for the gateway too (here `7e:b7:70:3b:81:77`). Even though nfdhcpd sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So nfdhcpd will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
+  Note you need to supply the MAC address for the gateway too (here `7e:b7:70:3b:81:77`). Even though `nfdhcpd` sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So `nfdhcpd` will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
 
 - Add IPv4 and IPv6 DNS entries for `www.google.com` (obviously this is just an example).
 
@@ -69,7 +69,7 @@ DNS entries and address lists are useful so multi-VM applications don't have to 
 
 `nfdhcpd` re-reads binding files and address list files when they change so you can update DNS entries while your application is running. If you define `NOTIFY_PORT`, as above, then when a binding file changes, a UDP packet will be sent to your application. The packet's source address will be `NOTIFY_IP`/`NOTIFY_IP6`. Its destination address will be `IP`/the link-local SLAAC EUI-64.
 
-Your application should send the packet back to let nfdhcpd know not to send it again.
+Your application should send the packet back to let `nfdhcpd` know not to send it again.
 
 # Global configuration
 
@@ -156,7 +156,7 @@ If you've defined `NOTIFY_IP` in your binding file then you should do something 
 
 # Fold
 
-nfdhcpd is used by [Fold](https://github.com/davedoesdev/fold) to provide per-interface configuration in a virtual Ethernet switch environment. Fold adds isolation between IPv4 subnets and IPv6 prefixes.
+`nfdhcpd` is used by [Fold](https://github.com/davedoesdev/fold) to provide per-interface configuration in a virtual Ethernet switch environment. Fold adds isolation between IPv4 subnets and IPv6 prefixes.
 
 # Debian packages
 
