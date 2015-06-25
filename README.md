@@ -168,9 +168,7 @@ dpkg-buildpackage -us -uc
 
 A pre-made package, `nfdhcpd_0.8_all.deb` (compiled on Ubuntu 15.04), can be found in the `dist` directory.
 
-Note that one of the package's dependencies currently has an issue which means things aren't quite as smooth as they should be:
-
-- `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) which is fixed with version 0.7.6 in Ubuntu 15.10. If you remake the package from source, it does include all its files. Alternatively, install version 0.7.6 from the [Ubuntu 15.10 package archive](http://packages.ubuntu.com/wily/amd64/python-cap-ng/download).
+Note that because of [this bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384), `nfdhcpd_0.8_all.deb` depends on `python-cap-ng` version 0.7.6, which you'll need to install manually from the [Ubuntu 15.10 package archive](http://packages.ubuntu.com/wily/amd64/python-cap-ng/download).
 
 # Acknowledgements
 
