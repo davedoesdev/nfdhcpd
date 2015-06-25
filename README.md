@@ -1,6 +1,6 @@
 # nfdhcpd
 
-nfdhcpd is a daemon which processes packets placed on netfilter queues by a iptables.
+nfdhcpd is a daemon which processes packets placed on netfilter queues by iptables.
 
 For details about the original project, see the [upstream documentation](https://www.synnefo.org/docs/nfdhcpd/latest/index.html).
 
