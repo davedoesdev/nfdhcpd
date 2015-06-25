@@ -47,8 +47,6 @@ This configures `tap0` like so:
 
 - In IPv6 router advertisements (including responses to ICMPv6 router solicitations), set the prefix to `fde5:824d:d315:3bb1::/64` (a private address range) and the DNS server option to `fde5:824d:d315:3bb1::1`. The DNS server address should be any unused address on this network. You can use the same address in multiple binding files.
 
-- In IPv6 router advertisements (including responses to ICMPv6 router solicitations), set the prefix to `fde5:824d:d315:3bb1::/64` (a private address range) and the DNS server option to `fde5:824d:d315:3bb1::1`. The DNS server address should be any unused address on this network. You can use the same address in multiple binding files.
-
   The attached device (usually a VM) is assumed to have a link-local address derived using Stateless Address Autoconfiguration (SLAAC), by combining the prefix with EUI-64. 
 
 - Add a gateway (`10.0.1.90`) for IPv4 traffic not on the subnet. This is optional.
