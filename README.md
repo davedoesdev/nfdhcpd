@@ -1,12 +1,12 @@
 # nfdhcpd
 
-nfdhcpd is a daemon which processes packets placed on netfilter queues by a iptables.
+`nfdhcpd` is a daemon which processes packets placed on netfilter queues by iptables.
 
 For details about the original project, see the [upstream documentation](https://www.synnefo.org/docs/nfdhcpd/latest/index.html).
 
-nfdhcpd can process IPv4 DHCP and IPv6 Router and Neighbour Solicitation messages. In addition, I've made the following enhancements:
+`nfdhcpd` can process IPv4 DHCP and IPv6 Router and Neighbour Solicitation messages. In addition, I've made the following enhancements:
 
-- Added support for DNS A, AAAA and TXT records. Different DNS records can be defined in binding files for each network interface you use with nfdhcpd. You can also forward DNS queries to the system resolver.
+- Added support for DNS A, AAAA and TXT records. Different DNS records can be defined in binding files for each network interface you use with `nfdhcpd`. You can also forward DNS queries to the system resolver.
 
 - Allow subnet configuration to be defined in binding files.
 
@@ -55,7 +55,7 @@ This configures `tap0` like so:
 
 - Add a gateway (`fde5:824d:d315:3bb1::90`) for IPv6 traffic outside the prefix. This is optional.
 
-  Note you need to supply the MAC address for the gateway too (here `7e:b7:70:3b:81:77`). Even though nfdhcpd sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So nfdhcpd will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
+  Note you need to supply the MAC address for the gateway too (here `7e:b7:70:3b:81:77`). Even though `nfdhcpd` sets the gateway address (and the `R` flag) in router advertisements, some Linux guests ignore it and always use the link-local address for the default route. So `nfdhcpd` will respond to neighbour solicitations for its link-local address with the MAC address of the gateway that you supply.
 
 - Add IPv4 and IPv6 DNS entries for `www.google.com` (obviously this is just an example).
 
@@ -69,7 +69,7 @@ DNS entries and address lists are useful so multi-VM applications don't have to 
 
 `nfdhcpd` re-reads binding files and address list files when they change so you can update DNS entries while your application is running. If you define `NOTIFY_PORT`, as above, then when a binding file changes, a UDP packet will be sent to your application. The packet's source address will be `NOTIFY_IP`/`NOTIFY_IP6`. Its destination address will be `IP`/the link-local SLAAC EUI-64.
 
-Your application should send the packet back to let nfdhcpd know not to send it again.
+Your application should send the packet back to let `nfdhcpd` know not to send it again.
 
 # Global configuration
 
@@ -156,7 +156,7 @@ If you've defined `NOTIFY_IP` in your binding file then you should do something 
 
 # Fold
 
-nfdhcpd is used by [Fold](https://github.com/davedoesdev/fold) to provide per-interface configuration in a virtual Ethernet switch environment. Fold adds isolation between IPv4 subnets and IPv6 prefixes.
+`nfdhcpd` is used by [Fold](https://github.com/davedoesdev/fold) to provide per-interface configuration in a virtual Ethernet switch environment. Fold adds isolation between IPv4 subnets and IPv6 prefixes.
 
 # Debian packages
 
@@ -166,13 +166,11 @@ The `debian` branch can make a `.deb` file for installing on Debian-based distri
 dpkg-buildpackage -us -uc
 ```
 
-A pre-made package, `nfdhcpd_0.7_all.deb` (compiled on Ubuntu 14.04), can be found in the `dist` directory.
+A pre-made package, `nfdhcpd_0.8_all.deb` (compiled on Ubuntu 15.04), can be found in the `dist` directory.
 
-Note that a couple of the package's dependencies currently have issues which means things aren't quite as smooth as they should be:
+Note that one of the package's dependencies currently has an issue which means things aren't quite as smooth as they should be:
 
-- `nfqueue-bindings` up to and including version 0.4 is missing a function which `nfdhcpd` requires. Version 0.5 includes this and should ship with Ubuntu 14.10. In the meantime you can find a modified package `python-nfqueue_0.4-6.1_amd64.deb` (and associated source `nfqueue-bindings_0.4-6.1.debian.tar.gz`) in the `dist` directory.
-
-- `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) but please visit the bug page and say it affects you. If you remake the package from source, it does include all its files. A pre-made package, `python-cap-ng_0.7.3-1ubuntu2.1_amd64.deb`, can be found in the `dist` directory.
+- `python-cap-ng` is missing all its files! This is a [known bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384) which should be fixed with version 0.7.6 in Ubuntu 15.10. If you remake the package from source, it does include all its files. A pre-made package, `python-cap-ng_0.7.4-2ubuntu2.1_amd64.deb`, can be found in the `dist` directory.
 
 # Acknowledgements
 
