@@ -1,3 +1,10 @@
+nfdhcpd (0.10) UNRELEASED; urgency=medium
+
+  [ David Halls ]
+  * Make remove_iface more robust (use dict.pop - atomic for builtin types)
+
+ -- David Halls <dahalls@gmail.com>  Sat, 27 Jun 2015 21:12:00 +0100
+
 nfdhcpd (0.9) UNRELEASED; urgency=medium
 
   [ David Halls ]
