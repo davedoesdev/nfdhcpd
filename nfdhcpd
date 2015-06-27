@@ -558,9 +558,6 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.v6nets = {}
         self.address_lists = {}
         self.nfq = {}
-        self.l2socket = socket.socket(socket.AF_PACKET,
-                                      socket.SOCK_RAW, ETH_P_ALL)
-        self.l2socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 0)
 
         # Inotify setup
         self.wm = pyinotify.WatchManager()
@@ -607,9 +604,6 @@ class VMNetProxy(object): # pylint: disable=R0902
         for q in self.nfq.values():
             q.close()
 
-        logging.debug("Closing socket")
-        self.l2socket.close()
-
         logging.debug("Stopping inotify watches")
         self.notifier.stop()
 
@@ -633,8 +627,14 @@ class VMNetProxy(object): # pylint: disable=R0902
         if isinstance(data, BasePacket):
             data = str(data)
 
-        self.l2socket.bind((iface, ETH_P_ALL))
-        count = self.l2socket.send(data)
+        l2socket = socket.socket(socket.AF_PACKET,
+                                 socket.SOCK_RAW, ETH_P_ALL)
+        l2socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 0)
+        try:
+            l2socket.bind((iface, ETH_P_ALL))
+            count = l2socket.send(data)
+        finally:
+            l2socket.close()
         ldata = len(data)
         if count != ldata:
             logging.warn("Truncated send on %s (%d/%d bytes sent)",
@@ -1609,6 +1609,9 @@ if __name__ == "__main__":
     # Keep only the capabilities we need
     # CAP_NET_ADMIN: we need to send nfqueue packet verdicts to a netlinkgroup
     capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+    capng.capng_update(capng.CAPNG_ADD,
+                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
+                       capng.CAP_NET_RAW)
     capng.capng_update(capng.CAPNG_ADD,
                        capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
                        capng.CAP_NET_ADMIN)
