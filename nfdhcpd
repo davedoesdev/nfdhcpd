@@ -817,23 +817,22 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Cleanup clients on a removed interface
 
         """
-        if iface in self.address_lists:
-            del self.address_lists[iface]
+        # dict.pop is atomic for built-in key types
+
+        if self.address_lists.pop(iface, None) is not None:
             return
 
-        if iface in self.subnets:
-            del self.subnets[iface]
+        self.subnets.pop(iface, None)
 
-        if iface in self.v6nets:
-            del self.v6nets[iface]
+        self.v6nets.pop(iface, None)
 
-        if iface in self.rev_clients:
-            del self.clients[self.rev_clients[iface]]
-            del self.rev_clients[iface]
+        mac = self.rev_clients.pop(iface, None)
+        if mac is not None:
+            self.clients.pop(mac, None)
 
-        if iface in self.rev_ifaces:
-            del self.ifaces[self.rev_ifaces[iface]]
-            del self.rev_ifaces[iface]
+        ifindex = self.rev_ifaces.pop(iface, None)
+        if ifindex is not None:
+            self.ifaces.pop(ifindex, None)
 
         logging.debug("Removed interface %s", iface)
 
