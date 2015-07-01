@@ -164,9 +164,9 @@ The `debian` branch can make a `.deb` file for installing on Debian-based distri
 dpkg-buildpackage -us -uc
 ```
 
-A pre-made package, `nfdhcpd_0.10_all.deb` (compiled on Ubuntu 15.04), can be found in the `dist` directory.
+A pre-made package, `nfdhcpd_0.11_all.deb` (compiled on Ubuntu 15.04), can be found in the `dist` directory.
 
-Note that because of [this bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384), `nfdhcpd_0.10_all.deb` depends on `python-cap-ng` version 0.7.6, which you'll need to install manually from the [Ubuntu 15.10 package archive](http://packages.ubuntu.com/wily/amd64/python-cap-ng/download).
+Note that because of [this bug](https://bugs.launchpad.net/ubuntu/+source/libcap-ng/+bug/1244384), `nfdhcpd_0.11_all.deb` depends on `python-cap-ng` version 0.7.6, which you'll need to install manually from the [Ubuntu 15.10 package archive](http://packages.ubuntu.com/wily/amd64/python-cap-ng/download).
 
 # Acknowledgements
 
