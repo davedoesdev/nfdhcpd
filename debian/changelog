@@ -1,3 +1,10 @@
+nfdhcpd (0.12) UNRELEASED; urgency=medium
+
+  [ David Halls ]
+  * Remove example DNS address entries
+
+ -- David Halls <dahalls@gmail.com>  Wed, 15 Jul 2015 07:46:00 +0100
+
 nfdhcpd (0.11) UNRELEASED; urgency=medium
 
   [ David Halls ]
