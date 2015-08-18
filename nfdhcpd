@@ -3,7 +3,7 @@
 
 # nfdcpd: A promiscuous, NFQUEUE-based DHCP server for virtual machine hosting
 # Copyright (c) 2010 GRNET SA
-# Parts copyright (c) 2014 David Halls <dahalls@gmail.com>
+# Parts copyright (c) 2015 David Halls <dahalls@gmail.com>
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@
 #
 
 import os
+import signal
+import errno
 import re
 import sys
 import glob
@@ -35,19 +37,21 @@ from functools import partial
 from StringIO import StringIO
 
 import daemon
+import daemon.runner
 import daemon.pidlockfile
 import nfqueue
 import pyinotify
+from lockfile import LockTimeout
 from dns import resolver
 from dns.exception import DNSException
 
 import IPy
 import socket
-from select import select
+import select
 from socket import AF_INET, AF_INET6
 
 from scapy.data import ETH_P_ALL
-from scapy.packet import BasePacket, Raw
+from scapy.packet import BasePacket, Raw, Packet
 from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
@@ -55,15 +59,43 @@ from scapy.layers.inet6 import IPv6, ICMPv6ND_RA, ICMPv6ND_NA, \
                                ICMPv6NDOptDstLLAddr, \
                                ICMPv6NDOptPrefixInfo, \
                                ICMPv6NDOptRDNSS, \
-                               ICMPv6NDOptMTU
+                               ICMPv6NDOptMTU, \
+                               get_cls, \
+                               icmp6ndoptscls
 from scapy.layers.dhcp import BOOTP, DHCP
+from scapy.layers.dhcp6 import DHCP6_Reply, DHCP6OptDNSServers, \
+                               DHCP6OptServerId, DHCP6OptClientId, \
+                               DUID_LLT, DHCP6_InfoRequest, \
+                               DHCP6OptDNSDomains, DHCP6OptUnknown
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 import scapy.layers.dns as scapy_dns
-from scapy.fields import ShortField
+from scapy.fields import ShortField, ByteField, FieldLenField, IntField, StrLenField
 import scapy.layers.dhcp as scapy_dhcp
 
 scapy_dhcp.DHCPOptions[26] = ShortField("interface_mtu", 1500)
 scapy_dhcp.DHCPRevOptions["interface_mtu"] = (26, scapy_dhcp.DHCPOptions[26])
+scapy_dhcp.DHCPOptions[119] = "domain_search"
+scapy_dhcp.DHCPRevOptions["domain_search"] = (119, None)
+
+class _ICMPv6NDGuessPayload:
+    name = "Dummy ND class that implements guess_payload_class()"
+    def guess_payload_class(self,p):
+        if len(p) > 1:
+            return get_cls(icmp6ndoptscls.get(ord(p[0]),"Raw"), "Raw")
+
+class ICMPv6NDOptDNSSL(_ICMPv6NDGuessPayload, Packet): # RFC 6106
+    name = "ICMPv6 Neighbor Discovery Option - DNS Search List Option"
+    fields_desc = [ ByteField("type", 31),
+                    FieldLenField("len",
+                                  None,
+                                  length_of="search",
+                                  fmt="B",
+                                  adjust=lambda pkt,x:x/8+1),
+                    ShortField("res", None),
+                    IntField("lifetime", 0xffffffff),
+                    StrLenField("search",
+                                default="",
+                                length_from=lambda pkt: (pkt.len-1)*8 ) ]
 
 DEFAULT_CONFIG = "/etc/nfdhcpd/nfdhcpd.conf"
 DEFAULT_PATH = "/var/run/ganeti-dhcpd"
@@ -79,7 +111,7 @@ LOG_FILENAME = "nfdhcpd.log"
 
 SYSFS_NET = "/sys/class/net"
 
-LOG_FORMAT = "%(asctime)-15s %(levelname)-6s %(message)s"
+LOG_FORMAT = "%(asctime)-15s %(levelname)-8s %(message)s"
 
 # Configuration file specification (see configobj documentation)
 CONFIG_SPEC = """
@@ -94,21 +126,25 @@ enable_dhcp = boolean(default=True)
 lease_lifetime = integer(min=0, max=4294967295)
 lease_renewal = integer(min=0, max=4294967295)
 server_ip = ip_addr(default=None)
-dhcp_queue = integer(min=0, max=65535)
+dhcp_queue = integer(min=-1, max=65535, default=-1)
+dhcp6_queue = integer(min=-1, max=65535, default=-1)
+dhcp6_hostname_optcode = integer(min=-1, max=65535, default=-1)
+dhcp6_domainname_optcode = integer(min=-1, max=65535, default=-1)
 nameservers = ip_addr_list(family=4, default=None)
 domain = string(default=None)
+domain_search = string_list(default=None)
 
 [ipv6]
 enable_ipv6 = boolean(default=True)
 ra_period = integer(min=1, max=4294967295)
-rs_queue = integer(min=0, max=65535)
-ns_queue = integer(min=0, max=65535)
+rs_queue = integer(min=-1, max=65535, default=-1)
+ns_queue = integer(min=-1, max=65535, default=-1)
 nameservers = ip_addr_list(family=6, default=None)
 
 [dns]
 enable_dns = boolean(default=False)
-dns_queue = integer(min=0, max=65535)
-dns6_queue = integer(min=0, max=65535)
+dns_queue = integer(min=-1, max=65535, default=-1)
+dns6_queue = integer(min=-1, max=65535, default=-1)
 server_ip = ip_addr(default=None)
 server_ip6 = ip6_addr(default=None)
 ttl = integer(min=0, max=2147483647, default=10)
@@ -120,8 +156,8 @@ nameservers6 = ip_addr_list(family=6, default=None)
 [notify]
 enable_notify = boolean(default=False)
 notify_period = integer(min=1, max=4294967295)
-notify_queue = integer(min=0, max=65535)
-notify6_queue = integer(min=0, max=65535)
+notify_queue = integer(min=-1, max=65535, default=-1)
+notify6_queue = integer(min=-1, max=65535, default=-1)
 
 [addresses]
 
@@ -155,7 +191,7 @@ DHCP_REQRESP = {
     DHCPDISCOVER: DHCPOFFER,
     DHCPREQUEST: DHCPACK,
     DHCPINFORM: DHCPACK,
-    }
+}
 
 
 def parse_routing_table(table="main", family=4):
@@ -221,11 +257,14 @@ def parse_binding_file(path):
         gateway6 = None
         gateway6_mac = None
         dhcp_server_ip = None
+        dhcp6_hostname_optcode = None
+        dhcp6_domainname_optcode = None
         dns_server_ip = None
         dns_server_ip6 = None
         nameservers = []
         nameservers6 = []
         domain = None
+        domain_search = []
         dns_ttl = None
         dns_forward = None
         addresses = {}
@@ -279,6 +318,9 @@ def parse_binding_file(path):
                                  line.split("=")[1].split(",")]
             elif line.startswith("DOMAIN="):
                 domain = line.split("=")[1].strip()
+            elif line.startswith("DOMAIN_SEARCH="):
+                domain_search = [d.strip() for d in
+                                 line.split("=")[1].split(",")]
             elif line.startswith("DNS_TTL="):
                 dns_ttl = int(line.split("=")[1].strip())
             elif line.startswith("DNS_FORWARD="):
@@ -313,6 +355,10 @@ def parse_binding_file(path):
                 notify_ip6 = line.split("=")[1].strip()
             elif line.startswith("BRIDGE="):
                 bridge = line.split("=")[1].strip()
+            elif line.startswith("DHCP6_HOSTNAME_OPTCODE="):
+                dhcp6_hostname_optcode = int(line.split("=")[1].strip())
+            elif line.startswith("DHCP6_DOMAINNAME_OPTCODE="):
+                dhcp6_domainname_optcode = int(line.split("=")[1].strip())
             else:
                 logging.warn("Unknown line in binding file %s: %s", path, line)
 
@@ -320,7 +366,8 @@ def parse_binding_file(path):
                       subnet=subnet, gateway=gateway,
                       subnet6=subnet6, gateway6=gateway6, gateway6_mac=gateway6_mac,
                       dhcp_server_ip=dhcp_server_ip, nameservers=nameservers,
-                      nameservers6=nameservers6, domain=domain,
+                      nameservers6=nameservers6,
+                      domain=domain, domain_search=domain_search,
                       dns_server_ip=dns_server_ip,
                       dns_server_ip6=dns_server_ip6,
                       addresses=addresses, addresses6=addresses6, txts=txts,
@@ -330,7 +377,9 @@ def parse_binding_file(path):
                       dns_nameservers=dns_nameservers, dns_nameservers6=dns_nameservers6,
                       notify_port=notify_port, notify_ip=notify_ip,
                       notify_ip6=notify_ip6, ip6=ip6,
-                      bridge=bridge)
+                      bridge=bridge,
+                      dhcp6_hostname_optcode=dhcp6_hostname_optcode,
+                      dhcp6_domainname_optcode=dhcp6_domainname_optcode)
     finally:
         iffile.close()
 
@@ -410,13 +459,15 @@ class Client(object):
     def __init__(self, mtu=None, mac=None, ip=None, link=None, hostname=None,
                  subnet=None, gateway=None, subnet6=None, gateway6=None, gateway6_mac=None,
                  dhcp_server_ip=None, nameservers=None, nameservers6=None,
-                 domain=None, dns_server_ip=None, dns_server_ip6=None,
+                 domain=None, domain_search=None,
+                 dns_server_ip=None, dns_server_ip6=None,
                  dns_ttl=None, dns_forward=None,
                  addresses=None, addresses6=None, txts=None,
                  address_lists=None, no_forward=None,
                  dns_nameservers=None, dns_nameservers6=None,
                  notify_port=None, notify_ip=None, notify_ip6=None,
-                 ip6=None, bridge=None):
+                 ip6=None, bridge=None,
+                 dhcp6_hostname_optcode=None, dhcp6_domainname_optcode=None):
         self.mtu = mtu
         self.mac = mac
         self.ip = ip
@@ -435,6 +486,7 @@ class Client(object):
         self.nameservers = nameservers
         self.nameservers6 = nameservers6
         self.domain = domain
+        self.domain_search = domain_search
         self.addresses = {} if addresses is None else addresses
         self.addresses6 = {} if addresses6 is None else addresses6
         self.txts = {} if txts is None else txts
@@ -450,6 +502,8 @@ class Client(object):
         self.seq_in = ""
         self.seq_out = ""
         self.bridge = bridge
+        self.dhcp6_hostname_optcode = dhcp6_hostname_optcode
+        self.dhcp6_domainname_optcode = dhcp6_domainname_optcode
 
     def is_valid(self):
         return self.mac is not None
@@ -480,6 +534,8 @@ def make_ll64(mac):
     """
     return make_eui64("fe80::", mac)
 
+def format_domain_search(domain):
+    return ''.join([chr(len(part)) + part for part in domain.split('.')]) + '\0'
 
 class Subnet(object):
     def __init__(self, net=None, gw=None):
@@ -530,12 +586,16 @@ def can_forward(no_forward, qname):
     return True
 
 class VMNetProxy(object): # pylint: disable=R0902
-    def __init__(self, data_path, dhcp_queue_num=None, # pylint: disable=R0913
-                 rs_queue_num=None, ns_queue_num=None,
-                 dns_queue_num=None, dns6_queue_num=None,
+    def __init__(self, data_path, dhcp_queue_num=-1, # pylint: disable=R0913
+                 rs_queue_num=-1, ns_queue_num=-1,
+                 dns_queue_num=-1, dns6_queue_num=-1,
+                 dhcp6_queue_num=-1,
+                 dhcp6_hostname_optcode=-1,
+                 dhcp6_domainname_optcode=-1,
                  dhcp_lease_lifetime=DEFAULT_LEASE_LIFETIME,
                  dhcp_lease_renewal=DEFAULT_LEASE_RENEWAL,
-                 dhcp_domain='',
+                 dhcp_domain=None,
+                 dhcp_domain_search=None,
                  dhcp_server_ip=None, dhcp_nameservers=None,
                  ra_period=DEFAULT_RA_PERIOD, ipv6_nameservers=None,
                  dns_server_ip=None,
@@ -544,14 +604,17 @@ class VMNetProxy(object): # pylint: disable=R0902
                  dns_forward=DEFAULT_DNS_FORWARD,
                  addresses=None, addresses6=None, txts=None, no_forward=None,
                  dns_nameservers=None, dns_nameservers6=None,
-                 notify_queue_num=None,
-                 notify6_queue_num=None,
+                 notify_queue_num=-1,
+                 notify6_queue_num=-1,
                  notify_period=DEFAULT_NOTIFY_PERIOD):
 
         self.data_path = data_path
-        self.lease_lifetime = dhcp_lease_lifetime
-        self.lease_renewal = dhcp_lease_renewal
+        self.dhcp_lease_lifetime = dhcp_lease_lifetime
+        self.dhcp_lease_renewal = dhcp_lease_renewal
+        self.dhcp6_hostname_optcode = dhcp6_hostname_optcode
+        self.dhcp6_domainname_optcode = dhcp6_domainname_optcode
         self.dhcp_domain = dhcp_domain
+        self.dhcp_domain_search = dhcp_domain_search
         self.dhcp_server_ip = dhcp_server_ip
         self.dns_server_ip = dns_server_ip
         self.dns_server_ip6 = dns_server_ip6
@@ -563,8 +626,6 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.no_forward = no_forward
         self.dns_nameservers = dns_nameservers
         self.dns_nameservers6 = dns_nameservers6
-        self.notify_queue_num = notify_queue_num
-        self.notify6_queue_num = notify6_queue_num
         self.ra_period = ra_period
         self.notify_period = notify_period
 
@@ -572,6 +633,11 @@ class VMNetProxy(object): # pylint: disable=R0902
             self.dhcp_nameservers = []
         else:
             self.dhcp_nameservers = dhcp_nameservers
+
+        if dhcp_domain_search is None:
+            self.dhcp_domain_search = []
+        else:
+            self.dhcp_domain_search = dhcp_domain_search
 
         if ipv6_nameservers is None:
             self.ipv6_nameservers = []
@@ -600,28 +666,31 @@ class VMNetProxy(object): # pylint: disable=R0902
         self.wm.add_watch(self.data_path, mask, rec=True)
 
         # NFQUEUE setup
-        if dhcp_queue_num is not None:
+        if dhcp_queue_num >= 0:
             self._setup_nfqueue(dhcp_queue_num, AF_INET, self.dhcp_response)
 
-        if rs_queue_num is not None:
+        if dhcp6_queue_num >= 0:
+            self._setup_nfqueue(dhcp6_queue_num, AF_INET6, self.dhcp6_response)
+
+        if rs_queue_num >= 0:
             self._setup_nfqueue(rs_queue_num, AF_INET6, self.rs_response)
             self.ipv6_enabled = True
 
-        if ns_queue_num is not None:
+        if ns_queue_num >= 0:
             self._setup_nfqueue(ns_queue_num, AF_INET6, self.ns_response)
             self.ipv6_enabled = True
 
-        if dns_queue_num is not None:
+        if dns_queue_num >= 0:
             self._setup_nfqueue(dns_queue_num, AF_INET, self.dns_response)
 
-        if dns6_queue_num is not None:
+        if dns6_queue_num >= 0:
             self._setup_nfqueue(dns6_queue_num, AF_INET6, self.dns6_response)
 
-        if notify_queue_num is not None:
+        if notify_queue_num >= 0:
             self._setup_nfqueue(notify_queue_num, AF_INET, self.notify_handle)
             self.notify_enabled = True
 
-        if notify6_queue_num is not None:
+        if notify6_queue_num >= 0:
             self._setup_nfqueue(notify6_queue_num, AF_INET6, self.notify6_handle)
             self.notify_enabled = True
 
@@ -650,6 +719,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         # This is mandatory for the queue to operate
         q.set_mode(nfqueue.NFQNL_COPY_PACKET)
         self.nfq[q.get_fd()] = q
+        logging.debug("Successfully set up NFQUEUE %d", queue_num)
 
     def sendp(self, data, iface):
         """ Send a raw packet using a layer-2 socket
@@ -658,8 +728,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         if isinstance(data, BasePacket):
             data = str(data)
 
-        l2socket = socket.socket(socket.AF_PACKET,
-                                 socket.SOCK_RAW, ETH_P_ALL)
+        l2socket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, ETH_P_ALL)
         l2socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 0)
         try:
             l2socket.bind((iface, ETH_P_ALL))
@@ -678,10 +747,14 @@ class VMNetProxy(object): # pylint: disable=R0902
         for path in glob.glob(os.path.join(self.data_path, "*")):
             self.add_iface(path)
 
+        self.print_clients()
+
     def get_ifindex(self, iface):
         """ Get the interface index from sysfs
 
         """
+        logging.debug("Getting ifindex for interface %s from sysfs", iface)
+
         path = os.path.abspath(os.path.join(SYSFS_NET, iface, "ifindex"))
         if not path.startswith(SYSFS_NET):
             return None
@@ -691,7 +764,7 @@ class VMNetProxy(object): # pylint: disable=R0902
         try:
             f = open(path, 'r')
         except EnvironmentError:
-            logging.debug("%s is probably down", iface)
+            logging.debug("%s is probably down, removing", iface)
             self.remove_iface(iface)
             return ifindex
 
@@ -717,6 +790,8 @@ class VMNetProxy(object): # pylint: disable=R0902
         """ Get the interface hardware address from sysfs
 
         """
+        logging.debug("Getting mac for iface %s", iface)
+
         path = os.path.abspath(os.path.join(SYSFS_NET, iface, "address"))
         if not path.startswith(SYSFS_NET):
             return None
@@ -954,6 +1029,7 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         domainname = binding.domain or self.dhcp_domain
         nameservers = binding.nameservers or self.dhcp_nameservers
+        domain_search = binding.domain_search or self.dhcp_domain_search
 
         if req_type == DHCPREQUEST and requested_addr != binding.ip:
             resp_type = DHCPNAK
@@ -967,8 +1043,8 @@ class VMNetProxy(object): # pylint: disable=R0902
             dhcp_options += [
                  ("broadcast_address", str(subnet.broadcast)),
                  ("subnet_mask", str(subnet.netmask)),
-                 ("renewal_time", self.lease_renewal),
-                 ("lease_time", self.lease_lifetime),
+                 ("renewal_time", self.dhcp_lease_renewal),
+                 ("lease_time", self.dhcp_lease_lifetime),
             ]
             if binding.hostname:
                 dhcp_options += [("hostname", binding.hostname)]
@@ -979,6 +1055,8 @@ class VMNetProxy(object): # pylint: disable=R0902
             if binding.mtu:
                 dhcp_options += [("interface_mtu", binding.mtu)]
             dhcp_options += [("name_server", x) for x in nameservers]
+            dhcp_options += [("domain_search", format_domain_search(x))
+                             for x in domain_search]
 
         elif req_type == DHCPINFORM:
             resp_type = DHCP_REQRESP[req_type]
@@ -987,6 +1065,8 @@ class VMNetProxy(object): # pylint: disable=R0902
             if domainname:
                 dhcp_options += [("domain", domainname)]
             dhcp_options += [("name_server", x) for x in nameservers]
+            dhcp_options += [("domain_search", format_domain_search(x))
+                             for x in domain_search]
 
         elif req_type == DHCPRELEASE:
             # Log and ignore
@@ -1006,6 +1086,91 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         logging.info("%s to %s (%s) on %s", DHCP_TYPES[resp_type], mac,
                      binding.ip, iface)
+        self.sendp(resp, iface)
+
+    def dhcp6_response(self, i, payload): # pylint: disable=W0613,R0914
+        """ Generate a reply to a DHCPv6 request
+
+        """
+        # If the packet comes from a bridged interface, use the ifindex
+        # of the physical device instead of the ifindex of the bridge interface
+        indev = payload.get_physindev() or payload.get_indev()
+        try:
+            # Get the actual interface from the ifindex
+            iface = self.ifaces[indev]
+        except KeyError:
+            # We don't know anything about this interface, so accept the packet
+            # and return
+            logging.debug("Ignoring DHCPv6 request on unknown iface %d", indev)
+            # We don't know what to do with this packet, so let the kernel
+            # handle it
+            payload.set_verdict(nfqueue.NF_ACCEPT)
+            return
+
+        # Decode the response - NFQUEUE relays IPv6 packets
+        pkt = IPv6(payload.get_data())
+
+        # Signal the kernel that it shouldn't further process the packet
+        payload.set_verdict(nfqueue.NF_DROP)
+
+        if not UDP in pkt:
+            logging.warn("Invalid request on %s, no UDP"
+                         " payload found", iface)
+            return
+
+        if not DHCP6_InfoRequest in pkt:
+            logging.warn("Invalid request on %s, no DHCP6_InfoRequest"
+                         " payload found", iface)
+            return
+
+        if not DHCP6OptClientId in pkt:
+            logging.warn("Invalid request on %s, no DHCP6OptClientId"
+                         " payload found", iface)
+            return
+
+        try:
+            binding = self.clients[self.rev_clients[iface]]
+        except KeyError:
+            logging.warn("No client on %s", iface)
+            return
+
+        ifmac = self.get_iface_hw_addr(iface)
+        if not ifmac:
+            return
+        ifll = str(make_ll64(ifmac))
+
+        resp = Ether(src=ifmac, dst=binding.mac)/\
+               IPv6(src=ifll, dst=pkt.src)/\
+               UDP(sport=pkt[UDP].dport, dport=pkt[UDP].sport)/\
+               DHCP6_Reply(trid=pkt[DHCP6_InfoRequest].trid)/\
+               DHCP6OptClientId(duid=pkt[DHCP6OptClientId].duid)/\
+               DHCP6OptServerId(duid=DUID_LLT(lladdr=ifmac, timeval=time.time()))
+
+        nameservers = binding.nameservers6 or self.ipv6_nameservers
+        if nameservers:
+            resp /= DHCP6OptDNSServers(dnsservers=nameservers)
+
+        domain_search = binding.domain_search or self.dhcp_domain_search
+        if domain_search:
+            resp /= DHCP6OptDNSDomains(dnsdomains=domain_search)
+
+        hostname_optcode = self.dhcp6_hostname_optcode \
+                           if binding.dhcp6_hostname_optcode is None \
+                           else binding.dhcp6_hostname_optcode
+        if (hostname_optcode > 0) and binding.hostname:
+            resp /= DHCP6OptUnknown(optcode=hostname_optcode,
+                                    data=binding.hostname)
+
+        domainname_optcode = self.dhcp6_domainname_optcode \
+                             if binding.dhcp6_domainname_optcode is None \
+                             else binding.dhcp6_domainname_optcode
+        domainname = binding.domain or self.dhcp_domain
+        if (domainname_optcode > 0) and domainname:
+            resp /= DHCP6OptUnknown(optcode=domainname_optcode,
+                                    data=domainname)
+
+        logging.info("DHCPv6 reply to %s (%s) on %s",
+                     binding.mac, pkt.src, iface)
         self.sendp(resp, iface)
 
     def rs_response(self, i, payload): # pylint: disable=W0613
@@ -1048,9 +1213,16 @@ class VMNetProxy(object): # pylint: disable=R0902
                     R=1 if subnet.gw else 0)
 
         nameservers = binding.nameservers6 or self.ipv6_nameservers
-
         if nameservers:
             resp /= ICMPv6NDOptRDNSS(dns=nameservers,
+                                     lifetime=self.ra_period * 3)
+
+        domain_search = binding.domain_search or self.dhcp_domain_search
+        if domain_search:
+            search = ''.join([format_domain_search(d)
+                              for d in domain_search])
+            search += ('\0' * 8)[:-len(search)%8]
+            resp /= ICMPv6NDOptDNSSL(search=search,
                                      lifetime=self.ra_period * 3)
 
         if binding.mtu:
@@ -1209,7 +1381,7 @@ class VMNetProxy(object): # pylint: disable=R0902
 
         qname = pkt[DNSQR].qname
         qtype = pkt[DNSQR].qtype
-        qtypename = scapy_dns.dnsqtypes[qtype]
+        qtypename = scapy_dns.dnsqtypes.get(qtype)
         addr = None
         attr = None
 
@@ -1393,9 +1565,16 @@ class VMNetProxy(object): # pylint: disable=R0902
                         R=1 if subnet.gw else 0)
 
             nameservers = client.nameservers6 or self.ipv6_nameservers
-
             if nameservers:
                 resp /= ICMPv6NDOptRDNSS(dns=nameservers,
+                                         lifetime=self.ra_period * 3)
+
+            domain_search = client.domain_search or self.dhcp_domain_search
+            if domain_search:
+                search = ''.join([format_domain_search(d)
+                                  for d in domain_search])
+                search += ('\0' * 8)[:-len(search)%8]
+                resp /= ICMPv6NDOptDNSSL(search=search,
                                          lifetime=self.ra_period * 3)
 
             if client.mtu:
@@ -1460,7 +1639,13 @@ class VMNetProxy(object): # pylint: disable=R0902
         timeout = max_timeout
 
         while True:
-            rlist, _, xlist = select(self.nfq.keys() + [iwfd], [], [], timeout)
+            try:
+                rlist, _, xlist = select.select(self.nfq.keys() + [iwfd], [], [], timeout)
+            except select.error, e:
+                if e[0] == errno.EINTR:
+                    logging.debug("select() got interrupted")
+                    continue
+
             if xlist:
                 logging.warn("Warning: Exception on %s",
                              ", ".join([str(fd) for fd in xlist]))
@@ -1493,6 +1678,13 @@ class VMNetProxy(object): # pylint: disable=R0902
                     if self.notify_enabled:
                         self.send_periodic_notify()
                     timeout = max_timeout - (time.time() - start)
+
+    def print_clients(self):
+        logging.info("%10s   %20s %20s %10s %20s %40s",
+                     'Key', 'Client', 'MAC', 'IFACE', 'IP', 'IPv6')
+        for k, cl in self.clients.items():
+            logging.info("%10s | %20s %20s %10s %20s %40s",
+                         k, cl.hostname, cl.mac, cl.iface, cl.ip, cl.ip6)
 
 
 if __name__ == "__main__":
@@ -1574,6 +1766,30 @@ if __name__ == "__main__":
                               ", ".join(section_list))
         sys.exit(1)
 
+    try:
+        uid = getpwuid(config["general"].as_int("user"))
+    except ValueError:
+        uid = getpwnam(config["general"]["user"])
+
+    # Keep only the capabilities we need
+    # CAP_NET_ADMIN: we need to send nfqueue packet verdicts to a netlinkgroup
+    # CAP_NET_RAW: we need to reopen socket in case the buffer gets full
+    # CAP_SETPCAP: needed by capng_change_id()
+    capng.capng_clear(capng.CAPNG_SELECT_BOTH)
+    capng.capng_update(capng.CAPNG_ADD,
+                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
+                       capng.CAP_NET_ADMIN)
+    capng.capng_update(capng.CAPNG_ADD,
+                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
+                       capng.CAP_NET_RAW)
+    capng.capng_update(capng.CAPNG_ADD,
+                       capng.CAPNG_EFFECTIVE | capng.CAPNG_PERMITTED,
+                       capng.CAP_SETPCAP)
+
+    # change uid
+    capng.capng_change_id(uid.pw_uid, uid.pw_gid,
+                          capng.CAPNG_DROP_SUPP_GRP|capng.CAPNG_CLEAR_BOUNDING)
+
     logger = logging.getLogger()
     if opts.debug:
         logger.setLevel(logging.DEBUG)
@@ -1594,25 +1810,40 @@ if __name__ == "__main__":
     if opts.daemonize:
         pidfile = daemon.pidlockfile.TimeoutPIDLockFile(
             config["general"]["pidfile"], 10)
+        # Remove any stale PID files, left behind by previous invocations
+        if daemon.runner.is_pidfile_stale(pidfile):
+            logger.warning("Removing stale PID lock file %s", pidfile.path)
+            pidfile.break_lock()
 
         d = daemon.DaemonContext(pidfile=pidfile,
+                                 umask=0022,
                                  stdout=handler.stream,
                                  stderr=handler.stream,
                                  files_preserve=[handler.stream])
-        d.umask = 0022
-        d.open()
+        try:
+            d.open()
+        except (daemon.pidlockfile.AlreadyLocked, LockTimeout):
+            logger.critical("Failed to lock pidfile %s,"
+                            " another instance running?", pidfile.path)
+            sys.exit(1)
 
     logging.info("Starting up")
+    logging.info("Running as %s (uid:%d, gid: %d)",
+                  config["general"]["user"], uid.pw_uid, uid.pw_gid)
 
     proxy_opts = {}
     if config["dhcp"].as_bool("enable_dhcp"):
         proxy_opts.update({
             "dhcp_queue_num": config["dhcp"].as_int("dhcp_queue"),
+            "dhcp6_queue_num": config["dhcp"].as_int("dhcp6_queue"),
             "dhcp_lease_lifetime": config["dhcp"].as_int("lease_lifetime"),
             "dhcp_lease_renewal": config["dhcp"].as_int("lease_renewal"),
+            "dhcp6_hostname_optcode": config["dhcp"].as_int("dhcp6_hostname_optcode"),
+            "dhcp6_domainname_optcode": config["dhcp"].as_int("dhcp6_domainname_optcode"),
             "dhcp_server_ip": config["dhcp"]["server_ip"],
             "dhcp_nameservers": config["dhcp"]["nameservers"],
             "dhcp_domain": config["dhcp"]["domain"],
+            "dhcp_domain_search": config["dhcp"]["domain_search"],
         })
 
     if config["ipv6"].as_bool("enable_ipv6"):
@@ -1649,29 +1880,16 @@ if __name__ == "__main__":
     # pylint: disable=W0142
     proxy = VMNetProxy(data_path=config["general"]["datapath"], **proxy_opts)
 
-    # Drop all capabilities except CAP_NET_RAW and change uid
-    try:
-        uid = getpwuid(config["general"].as_int("user"))
-    except ValueError:
-        uid = getpwnam(config["general"]["user"])
-
-    logging.debug("Setting capabilities and changing uid")
-    logging.debug("User: %s, uid: %d, gid: %d",
-                  config["general"]["user"], uid.pw_uid, uid.pw_gid)
-
-    # Keep only the capabilities we need
-    # CAP_NET_ADMIN: we need to send nfqueue packet verdicts to a netlinkgroup
-    capng.capng_clear(capng.CAPNG_SELECT_BOTH)
-    capng.capng_update(capng.CAPNG_ADD,
-                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
-                       capng.CAP_NET_RAW)
-    capng.capng_update(capng.CAPNG_ADD,
-                       capng.CAPNG_EFFECTIVE|capng.CAPNG_PERMITTED,
-                       capng.CAP_NET_ADMIN)
-    capng.capng_change_id(uid.pw_uid, uid.pw_gid,
-                          capng.CAPNG_DROP_SUPP_GRP|capng.CAPNG_CLEAR_BOUNDING)
-
     logging.info("Ready to serve requests")
+
+    def debug_handler(signum, _):
+        logging.debug('Received signal %d. Printing proxy state...', signum)
+        proxy.print_clients()
+
+    # Set the signal handler for debuging clients
+    signal.signal(signal.SIGUSR1, debug_handler)
+    signal.siginterrupt(signal.SIGUSR1, False)
+
     try:
         proxy.serve()
     except Exception:
