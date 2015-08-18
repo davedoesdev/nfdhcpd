@@ -1,3 +1,10 @@
+nfdhcpd (0.20) UNRELEASED; urgency=medium
+
+  [ David Halls ]
+  * Bring across upstream changes from Feb 2014 (DHCPv6)
+
+ -- David Halls <dahalls@gmail.com>  Tue, 18 Aug 2015 23:54:00 +0100
+
 nfdhcpd (0.12) UNRELEASED; urgency=medium
 
   [ David Halls ]
