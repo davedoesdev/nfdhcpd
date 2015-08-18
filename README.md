@@ -4,7 +4,7 @@
 
 For details about the original project, see the [upstream documentation](https://www.synnefo.org/docs/nfdhcpd/latest/index.html).
 
-`nfdhcpd` can process IPv4 DHCP and IPv6 Router and Neighbour Solicitation messages. In addition, I've made the following enhancements:
+`nfdhcpd` can process IPv4 DHCP, IPv6 DHCPv6 and IPv6 Router and Neighbour Solicitation messages. In addition, I've made the following enhancements:
 
 - Added support for DNS A, AAAA and TXT records. Different DNS records can be defined in binding files for each network interface you use with `nfdhcpd`. You can also forward DNS queries to the system resolver.
 
