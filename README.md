@@ -86,20 +86,27 @@ enable_dhcp = yes
 lease_lifetime = 604800 # 1 week
 lease_renewal = 3600 	# 1 hour
 dhcp_queue = 42 # NFQUEUE number to listen on for DHCP requests
+dhcp6_queue = 43 # NFQUEUE number to listen on for DHCPv6 requests
 
 ## IPv6-related functionality
 [ipv6]
 enable_ipv6 = yes
 ra_period = 300 # seconds
-rs_queue = 43 # NFQUEUE number to listen on for router solicitations
-ns_queue = 44 # NFQUEUE number to listen on for neighbor solicitations
+rs_queue = 44 # NFQUEUE number to listen on for router solicitations
+ns_queue = 45 # NFQUEUE number to listen on for neighbor solicitations
 
 [dns]
 enable_dns = yes
-dns_queue = 45 # NFQUEUE number to listen on for DNS queries
-dns6_queue = 46 # NFQUEUE number to listen on for DNS queries over IPv6
+dns_queue = 46 # NFQUEUE number to listen on for DNS queries
+dns6_queue = 47 # NFQUEUE number to listen on for DNS queries over IPv6
 ttl = 10
 forward = yes
+
+[notify]
+enable_notify = yes
+notify_period  = 60 # seconds
+notify_queue = 48
+notify6_queue = 49
 
 [addresses]
 www.yahoo.co.uk. = 10.0.1.1
