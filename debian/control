@@ -8,7 +8,7 @@ Standards-Version: 3.9.1
 Package: nfdhcpd
 Architecture: all
 Depends: ${misc:Depends}, ${python:Depends}, python-scapy(>= 2.0.1-1),
-         python-daemon(>=1.5.2-1), python-pyinotify(>=0.7.1-1),
+         python-daemon(>=2.0.5-1), python-pyinotify(>=0.7.1-1),
          python-ipy(>=1:0.62-1), nfqueue-bindings-python(>=0.5-1),
          python-cap-ng(>=0.7.6-1), python(>=2.4), python-configobj(>= 4.5.2-1),
          python-dnspython(>=1.11.1-1build1)
