@@ -38,10 +38,10 @@ from StringIO import StringIO
 
 import daemon
 import daemon.runner
-import daemon.pidlockfile
+import daemon.pidfile
 import nfqueue
 import pyinotify
-from lockfile import LockTimeout
+from lockfile import AlreadyLocked, LockTimeout
 from dns import resolver
 from dns.exception import DNSException
 
@@ -1808,7 +1808,7 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     if opts.daemonize:
-        pidfile = daemon.pidlockfile.TimeoutPIDLockFile(
+        pidfile = daemon.pidfile.TimeoutPIDLockFile(
             config["general"]["pidfile"], 10)
         # Remove any stale PID files, left behind by previous invocations
         if daemon.runner.is_pidfile_stale(pidfile):
@@ -1822,7 +1822,7 @@ if __name__ == "__main__":
                                  files_preserve=[handler.stream])
         try:
             d.open()
-        except (daemon.pidlockfile.AlreadyLocked, LockTimeout):
+        except (AlreadyLocked, LockTimeout):
             logger.critical("Failed to lock pidfile %s,"
                             " another instance running?", pidfile.path)
             sys.exit(1)
