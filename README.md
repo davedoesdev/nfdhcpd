@@ -1,6 +1,6 @@
 # nfdhcpd
 
-**Note: The changes I've made here have now been merged by grnet into the [main repository](https://github.com/grnet/nfdhcpd).**
+**Note: Some of the changes I've made here have now been merged by grnet into the [main repository](https://github.com/grnet/nfdhcpd).**
 
 `nfdhcpd` is a daemon which processes packets placed on netfilter queues by iptables.
 
